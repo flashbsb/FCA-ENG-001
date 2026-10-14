@@ -2707,7 +2707,44 @@ TOOLS_MANIFEST = [
                 "status": {"type": "string", "enum": ["pendente", "confirmado", "falso_positivo", "fora_de_escopo", "evidencia_insuficiente", "duplicado"]},
                 "rationale": {"type": "string"},
                 "related_finding_id": {"type": "string"},
-                "reviewer": {"type": "s    {
+                "reviewer": {"type": "string"}
+            }, "required": ["finding_id", "status", "rationale"]}}
+        }, "required": ["timestamp", "decisions"]}
+    },
+    {
+        "name": "analyze_structural_integrity",
+        "description": "Executa a verificação determinística e exaustiva dos 7 pilares estruturais e redacionais sobre todos os documentos de entrada.",
+        "inputSchema": {"type": "object", "properties": {
+            "lote_path": {"type": "string", "description": "Caminho do lote (default: 'entrada')."}
+        }, "required": []}
+    },
+    {
+        "name": "scaffold_skill",
+        "description": "Gera o rascunho de uma nova skill em .agents/skills/<skill_name>/SKILL.md seguindo o padrão oficial FCA-ENG-001.",
+        "inputSchema": {"type": "object", "properties": {
+            "skill_name": {"type": "string"},
+            "description": {"type": "string"},
+            "domain": {"type": "string"},
+            "checklist_file": {"type": "string"}
+        }, "required": ["skill_name"]}
+    },
+    {
+        "name": "extract_docx_summary",
+        "description": "Extrai contagem de parágrafos, tabelas e mídias de um arquivo .docx.",
+        "inputSchema": {"type": "object", "properties": {
+            "filename": {"type": "string"},
+            "lote_path": {"type": "string"}
+        }, "required": ["filename"]}
+    },
+    {
+        "name": "extract_xlsx_summary",
+        "description": "Extrai abas, cabeçalhos e amostra de dados de um arquivo .xlsx.",
+        "inputSchema": {"type": "object", "properties": {
+            "filename": {"type": "string"},
+            "lote_path": {"type": "string"}
+        }, "required": ["filename"]}
+    },
+    {
         "name": "validate_analise_contract",
         "description": "Valida se os entregáveis da RTI (index.html e dados_analise.json) existem em analise/<timestamp>/relatorios/ e verifica a cobertura de skills.",
         "inputSchema": {"type": "object", "properties": {
@@ -2771,40 +2808,6 @@ def dispatch_tool(name: str, args: dict) -> str:
         return tool_validate_analise_contract(args.get("timestamp"))
     elif name == "build_run_index_html":
         return tool_build_run_index_html(args.get("timestamp", ""))
-    elif name == "finalize_execution":
-        return tool_finalize_execution(args.get("timestamp", ""))
-    elif name == "build_master_index":
-        return tool_build_master_index()��───
-
-def dispatch_tool(name: str, args: dict) -> str:
-    if name == "freeze_baseline":
-        return tool_freeze_baseline(args.get("lote_path"))
-    elif name == "profile_baseline":
-        return tool_profile_baseline(args.get("lote_path"))
-    elif name == "run_full_audit":
-        return tool_run_full_audit(args.get("lote_path"))
-    elif name == "record_visual_analysis":
-        return tool_record_visual_analysis(args.get("timestamp", ""), args.get("reviewed_asset_ids", []), args.get("findings", []))
-    elif name == "get_semantic_review_manifest":
-        return tool_get_semantic_review_manifest(args.get("timestamp", ""))
-    elif name == "get_semantic_document_chunk":
-        return tool_get_semantic_document_chunk(args.get("timestamp", ""), args.get("document_path", ""),
-                                                args.get("start_char", 0), args.get("max_chars", 12000))
-    elif name == "record_semantic_analysis":
-        return tool_record_semantic_analysis(args.get("timestamp", ""), args.get("reviewed_scopes", []), args.get("findings", []))
-    elif name == "adjudicate_findings":
-        return tool_adjudicate_findings(args.get("timestamp", ""), args.get("decisions", []))
-    elif name == "analyze_structural_integrity":
-        return tool_analyze_structural_integrity(args.get("lote_path", "entrada"))
-    elif name == "scaffold_skill":
-        return tool_scaffold_skill(args.get("skill_name", ""), args.get("description", ""),
-                                   args.get("domain", ""), args.get("checklist_file", ""))
-    elif name == "extract_docx_summary":
-        return tool_extract_docx_summary(args.get("filename", ""), args.get("lote_path"))
-    elif name == "extract_xlsx_summary":
-        return tool_extract_xlsx_summary(args.get("filename", ""), args.get("lote_path"))
-    elif name == "validate_analise_contract":
-        return tool_validate_analise_contract(args.get("timestamp"))
     elif name == "finalize_execution":
         return tool_finalize_execution(args.get("timestamp", ""))
     elif name == "build_master_index":

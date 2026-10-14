@@ -14,7 +14,7 @@ O **FCA-ENG-001** é um framework padronizado para condução de **Revisão Téc
 3. **Segregação tridimensional:** Tipo do achado × Criticidade × Prioridade são campos independentes e nunca sinônimos.
 4. **Sem atos oficiais:** Minutas sugeridas são não oficiais — condicionadas à validação do proprietário competente.
 5. **PT-BR exclusivo:** 100% dos relatórios, análises e comunicações em Português do Brasil.
-6. **6 relatórios reais:** Nenhum arquivo é cópia de outro. IQD calculado dinamicamente.
+6. **Entregável Consolidado Exaustivo (SSOT):** O produto final da RTI é consolidado em uma base auditável `dados_analise.json` e sintetizado em um Dashboard Executivo HTML (`index.html`) interativo com 8 seções. IQD e parecer calculados dinamicamente.
 7. **Correlação cruzada:** Todos os arquivos de um lote são comparados entre si.
 
 ---
@@ -45,18 +45,22 @@ flowchart TD
 │   ├── AGENTS.md                        # Diretrizes globais para assistentes de IA
 │   └── skills/
 │       ├── analisar-documento/          # Skill base — orquestra a RTI completa
-│       ├── analisar-rfp/                # Análise especializada de RFPs e RFIs
-│       ├── analisar-hld/                # Análise de High Level Designs
-│       ├── analisar-lld/                # Análise de Low Level Designs
-│       ├── analisar-contrato/           # Análise de cláusulas contratuais e SLAs
-│       ├── analisar-planilha/           # Análise de planilhas .xlsx e .csv
+│       ├── analisar-carrier/            # Transporte Telecom, DWDM, REDIP, VPNs
+│       ├── analisar-cloud/              # Multi-Cloud, Kubernetes, Serverless
+│       ├── analisar-contrato/           # Cláusulas contratuais, minutas e SLAs
+│       ├── analisar-datacenter/         # Tier III/IV, Climatização, UPS, Cabling
 │       ├── analisar-diagramas/          # Análise multimodal de imagens/diagramas
-│       └── analisar-lgpd/              # Conformidade LGPD
+│       ├── analisar-hld/                # High Level Designs e arquitetura
+│       ├── analisar-integracoes/        # APIs REST/SOAP, TM Forum, ESB
+│       ├── analisar-lgpd/               # Conformidade LGPD e privacidade
+│       ├── analisar-lld/                # Low Level Designs e parametrização
+│       ├── analisar-planilha/           # Planilhas .xlsx e .csv
+│       └── analisar-rfp/                # Requests for Proposal (RFPs e RFIs)
 ├── mcp-server/
-    │   ├── server.py                        # Servidor MCP: extração, controles e persistência auditável
-    │   ├── semantic_pipeline.py             # Contrato de evidência e escopos da revisão semântica
-│   ├── audit_engine.py                  # Gerador dos 6 relatórios Markdown
-│   ├── html_compiler.py                 # Compilador HTML corporativo
+│   ├── server.py                        # Servidor MCP: extração, controles e persistência auditável
+│   ├── semantic_pipeline.py             # Contrato de evidência e escopos da revisão semântica
+│   ├── audit_engine.py                  # Motor de cálculo dinâmico de IQD e parecer
+│   ├── html_compiler.py                 # Compilador HTML corporativo consolidado
 │   └── requirements.txt                 # openpyxl, pypdf
 ├── framework/
 │   ├── revisao.md                       # Procedimento FCA-ENG-001
@@ -69,18 +73,13 @@ flowchart TD
 │       ├── 01_Anexo_A_Requisitos.docx
 │       └── planilha_quantitativos.xlsx
 └── analise/                             # Histórico de análises por timestamp
-    ├── index.html                        # Central Master de Análises
+    ├── index.html                       # Central Master de Análises
     ├── manifest.json
     └── YYYYMMDD_HHMMSS_NOME_LOTE/
-        ├── entrada/                      # Cópia dos arquivos originais (imutável)
+        ├── entrada/                     # Cópia dos arquivos originais (imutável)
         └── relatorios/
-            ├── 00_RESUMO_EXECUTIVO.md
-            ├── 01_PONTOS_DE_ATENCAO.md
-            ├── 02_ACOES_E_MINUTAS.md
-            ├── 03_RASTREABILIDADE_E_LOG.md
-            ├── 04_LACUNAS_E_RISCOS.md
-            ├── 05_CONFORMIDADE_CHECKLISTS.md
-            └── index.html
+            ├── dados_analise.json       # Base de dados estruturada SSOT
+            └── index.html               # Relatório Consolidado Exaustivo HTML
 ```
 
 ---
@@ -113,20 +112,24 @@ entrada/
 > 1. Execute `profile_baseline` para identificar domínios, checklists e skills recomendadas.  
 > 2. Apresente o plano de triagem e aguarde minha confirmação.  
 > 3. Após confirmação: gere o timestamp, calcule os hashes SHA-256 e execute a análise completa.  
-> 4. Gere os 6 relatórios em `analise/<timestamp>/relatorios/` e o `index.html`.  
+> 4. Gere os entregáveis em `analise/<timestamp>/relatorios/` (`dados_analise.json` e `index.html`).  
 > 5. Execute `finalize_execution` para arquivar o lote e atualizar a Central."*
 
 ### 🛠️ Skills Especializadas
 
-| Skill | Gatilho |
-|-------|---------|
-| `analisar-documento` | Obrigatória para qualquer lote |
+| Skill | Gatilho / Domínio |
+|-------|-------------------|
+| `analisar-documento` | Obrigatória para qualquer lote (orquestração e 7 pilares) |
 | `analisar-rfp` | RFP, RFI, Edital, Anexos |
-| `analisar-hld` | HLD, NTP, Arquitetura |
+| `analisar-hld` | HLD, NTP, Arquitetura de Alto Nível |
 | `analisar-lld` | LLD, ET, Especificação Técnica |
-| `analisar-contrato` | Minuta de Contrato, Cláusulas, SLAs |
-| `analisar-planilha` | `.xlsx`, `.csv` |
-| `analisar-diagramas` | `.png`, `.jpg`, `.svg` |
+| `analisar-carrier` | Operadoras Telecom, DWDM, REDIP, VPNs L2/L3, DCN |
+| `analisar-cloud` | Multi-Cloud AWS/Azure/GCP, Kubernetes, Serverless |
+| `analisar-datacenter` | Infraestrutura Tier III/IV, UPS, Climatização, Redundância 2N |
+| `analisar-integracoes` | Barramentos ESB, APIs REST/SOAP, TM Forum Open APIs |
+| `analisar-contrato` | Minuta de Contrato, Cláusulas, SLAs, Penalidades |
+| `analisar-planilha` | Planilhas `.xlsx`, `.csv` e tabelas de quantitativos |
+| `analisar-diagramas` | Artefatos visuais `.png`, `.jpg`, `.svg`, DrawIO |
 | `analisar-lgpd` | LGPD, dados pessoais, privacidade |
 
 ---
