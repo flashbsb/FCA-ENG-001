@@ -1,0 +1,110 @@
+# Ignorar arquivos temporários, rascunhos e scripts de trabalho
+/publicacao-candidata/
+/scratch/
+/tmp/
+/temp/
+tmp*
+*.tmp
+*.log
+
+# Ignorar ambientes virtuais e cache Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Ignorar configurações locais de IDEs e editores
+.vscode/
+.idea/
+.antigravity/
+.gemini/
+
+# Configuração MCP local pode conter caminhos absolutos da estação de trabalho
+/mcp-server/mcp_config.json
+
+# Ignorar arquivos de sistema operacional
+.DS_Store
+Thumbs.db
+ehthumbs.db
+
+# Proteção de dados sensíveis, credenciais e arquivos de produção
+.env
+.env.*
+!.env.example
+!.env.example.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cert
+*.der
+*.jks
+*.keystore
+*.kdbx
+credentials.json
+credentials.yml
+credentials.yaml
+secrets.json
+secrets.yml
+secrets.yaml
+
+# Proteção de dados de entrada e de saída de análises.
+# Regras explícitas e recursivas cobrem todos os lotes dinâmicos e relatórios gerados.
+/entrada/**
+!/entrada/
+!/entrada/README.md
+!/entrada/.gitkeep
+
+/analise/**
+!/analise/
+!/analise/README.md
+!/analise/.gitkeep
+
+# Defesa em profundidade: objetos de análise NUNCA devem ser versionados no Git
+*.docx
+*.doc
+*.pdf
+*.xlsx
+*.xls
+*.csv
+*.vsdx
+*.vsd
+*.drawio
+*.pcap
+*.pcapng
+*.zip
+*.7z
+*.tar.gz
+*.rar
+
+# Imagens e diagramas que são artefatos de análise (evita vazamento fora de entrada/)
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.webp
+
+# Bloqueio de arquivos temporários de lock do Microsoft Office e editores
+~$*
+.~lock.*
+*.swp
+*.swo
+*~
+
+# Arquivos de dados de análise soltos fora de analise/
+dados_analise.json
+decisoes.yaml
+
+# Ignorar histórico legado de projetos específicos
+/framework/historico/
+
