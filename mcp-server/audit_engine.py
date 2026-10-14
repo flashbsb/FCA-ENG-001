@@ -244,3 +244,167 @@ def generate_6_reports(rel_dir: str, data: dict) -> str:
 
     return parecer_badge
 
+
+def detect_document_versions(filenames: list[str]) -> dict:
+    """
+    Analisa uma lista de nomes de arquivos dentro de um lote e agrupa por documento base.
+    Identifica se há múltiplos arquivos que representam versões sucessivas (série histórica).
+    Retorna um dicionário {doc_base: [{'filename': ..., 'version': ..., 'order': ...}, ...]}.
+    """
+    version_regex = re.compile(r'[_vV\- ]+(\d+(?:\.\d+)*)', re.IGNORECASE)
+    groups = {}
+
+    for fname in sorted(filenames):
+        # Remove extensão
+        base_name, _ = os.path.splitext(fname)
+        # Tenta extrair a versão
+        match = version_regex.search(base_name)
+        if match:
+            ver_str = match.group(1)
+            # Chave do documento removendo a versão
+            canonical_key = re.sub(r'[_vV\- ]+' + re.escape(ver_str), '', base_name).strip('_- ')
+            canonical_key = re.sub(r'\s+', '_', canonical_key).upper()
+            try:
+                # Transforma '1.8' em (1, 8) para ordenação correta
+                parts = tuple(int(p) for p in ver_str.split('.') if p.isdigit())
+            except Exception:
+                parts = (0,)
+            info = {
+                "filename": fname,
+                "version_str": ver_str,
+                "version_tuple": parts,
+                "is_versioned": True
+            }
+        else:
+            canonical_key = re.sub(r'\s+', '_', base_name).upper()
+            info = {
+                "filename": fname,
+                "version_str": "1.0",
+                "version_tuple": (1, 0),
+                "is_versioned": False
+            }
+
+        groups.setdefault(canonical_key, []).append(info)
+
+    # Ordena cada grupo pela tupla de versão
+    for key in groups:
+        groups[key].sort(key=lambda x: x["version_tuple"])
+
+    return groups
+
+
+def reconcile_versions(json_antigo: dict, json_novo: dict) -> dict:
+    """
+    Confronta a base de auditoria de uma versão anterior com a versão nova do mesmo lote/documento.
+    Classifica os achados em:
+      - Sanados (resolvidos na nova versão)
+      - Reincidentes (persistem sem correção)
+      - Novos (introduzidos na nova versão)
+    Calcula taxa de resolução e delta de IQD.
+    """
+    findings_antigos = json_antigo.get("findings", [])
+    findings_novos = json_novo.get("findings", [])
+
+    def _simplify(s: str) -> str:
+        s = s.lower()
+        return re.sub(r'[^a-z0-9]', '', s)
+
+    reincidentes = []
+    sanados = []
+    novos = []
+    matched_new_ids = set()
+
+    for fa in findings_antigos:
+        fa_id = fa.get("id", "")
+        fa_tit = _simplify(fa.get("titulo", ""))
+        fa_cat = fa.get("categoria", "")
+
+        matched_fn = None
+        for fn in findings_novos:
+            fn_id = fn.get("id", "")
+            if fn_id in matched_new_ids:
+                continue
+            fn_tit = _simplify(fn.get("titulo", ""))
+            fn_cat = fn.get("categoria", "")
+
+            # Match por ID direto ou por similaridade forte de título na mesma categoria
+            if (fa_id and fn_id and fa_id == fn_id) or (fa_cat == fn_cat and (fa_tit in fn_tit or fn_tit in fa_tit)):
+                matched_fn = fn
+                matched_new_ids.add(fn_id)
+                break
+
+        if matched_fn:
+            reincidentes.append({
+                "id_anterior": fa_id,
+                "id_atual": matched_fn.get("id", ""),
+                "titulo": matched_fn.get("titulo", fa.get("titulo", "")),
+                "criticidade": matched_fn.get("criticidade", matched_fn.get("crit", "Média")),
+                "prioridade": matched_fn.get("prioridade", matched_fn.get("prio", "P2")),
+                "categoria": matched_fn.get("categoria", fa_cat),
+                "localizacao_anterior": fa.get("localizacao", ""),
+                "localizacao_atual": matched_fn.get("localizacao", ""),
+                "status": "reincidente"
+            })
+        else:
+            sanados.append({
+                "id_anterior": fa_id,
+                "titulo": fa.get("titulo", ""),
+                "criticidade": fa.get("criticidade", fa.get("crit", "Média")),
+                "prioridade": fa.get("prioridade", fa.get("prio", "P2")),
+                "categoria": fa_cat,
+                "localizacao": fa.get("localizacao", ""),
+                "status": "sanado"
+            })
+
+    for fn in findings_novos:
+        fn_id = fn.get("id", "")
+        if fn_id not in matched_new_ids:
+            novos.append({
+                "id_atual": fn_id,
+                "titulo": fn.get("titulo", ""),
+                "criticidade": fn.get("criticidade", fn.get("crit", "Média")),
+                "prioridade": fn.get("prioridade", fn.get("prio", "P2")),
+                "categoria": fn.get("categoria", ""),
+                "localizacao": fn.get("localizacao", ""),
+                "status": "novo"
+            })
+
+    total_ant = len(findings_antigos)
+    total_novo = len(findings_novos)
+    n_sanados = len(sanados)
+    n_reincidentes = len(reincidentes)
+    n_novos = len(novos)
+
+    taxa_resolucao = round((n_sanados / total_ant * 100), 1) if total_ant > 0 else 100.0
+
+    iqd_ant_str = str(json_antigo.get("kpis", {}).get("iqd", "0%"))
+    iqd_novo_str = str(json_novo.get("kpis", {}).get("iqd", "0%"))
+
+    try:
+        iqd_ant_num = float(re.sub(r'[^0-9.]', '', iqd_ant_str))
+        iqd_novo_num = float(re.sub(r'[^0-9.]', '', iqd_novo_str))
+        delta_iqd = round(iqd_novo_num - iqd_ant_num, 1)
+        delta_iqd_str = f"{'+' if delta_iqd >= 0 else ''}{delta_iqd}%"
+    except Exception:
+        delta_iqd_str = "—"
+
+    return {
+        "versao_anterior": json_antigo.get("timestamp", "anterior"),
+        "versao_atual": json_novo.get("timestamp", "atual"),
+        "total_anteriores": total_ant,
+        "total_atuais": total_novo,
+        "achados_sanados_count": n_sanados,
+        "achados_reincidentes_count": n_reincidentes,
+        "novos_achados_count": n_novos,
+        "taxa_resolucao_pct": taxa_resolucao,
+        "iqd_anterior": iqd_ant_str,
+        "iqd_atual": iqd_novo_str,
+        "delta_iqd": delta_iqd_str,
+        "parecer_anterior": json_antigo.get("parecer_badge", json_antigo.get("parecer", "—")),
+        "parecer_atual": json_novo.get("parecer_badge", json_novo.get("parecer", "—")),
+        "sanados": sanados,
+        "reincidentes": reincidentes,
+        "novos": novos
+    }
+
+

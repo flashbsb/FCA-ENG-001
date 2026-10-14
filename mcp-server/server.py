@@ -1022,6 +1022,11 @@ def tool_profile_baseline(lote_path: str = None) -> str:
         active_chk, inactive_chk = get_active_checklists(domains, has_images, has_xlsx)
         skills = get_skills_recommendation(domains, has_images, has_xlsx)
 
+        # Detecção de séries temporais de versões dentro do lote
+        import audit_engine
+        version_groups = audit_engine.detect_document_versions([os.path.basename(f) for f in doc_files])
+        has_version_series = any(len(v) > 1 for v in version_groups.values())
+
         return {
             "lote_dir": lote_dir,
             "lote_name": os.path.basename(lote_dir),
@@ -1035,6 +1040,8 @@ def tool_profile_baseline(lote_path: str = None) -> str:
             "skills_recommendation": skills,
             "has_images": has_images,
             "has_xlsx": has_xlsx,
+            "has_version_series": has_version_series,
+            "version_groups": version_groups
         }
 
     profiles = [profile_lote(l) for l in lotes]
@@ -2154,18 +2161,41 @@ def tool_extract_xlsx_summary(filename: str, lote_path: str = None) -> str:
 def _get_relatorios_dir(root: str, timestamp: str = None) -> tuple:
     analise_dir = os.path.join(root, 'analise')
     if timestamp:
-        return os.path.join(analise_dir, timestamp, 'relatorios'), timestamp
+        direct_path = os.path.join(analise_dir, timestamp, 'relatorios')
+        if os.path.exists(direct_path):
+            return direct_path, timestamp
+        # Procura em subpastas de lotes: analise/<lote>/<timestamp>/relatorios
+        if os.path.exists(analise_dir):
+            for entry in os.listdir(analise_dir):
+                entry_path = os.path.join(analise_dir, entry)
+                if os.path.isdir(entry_path):
+                    candidate = os.path.join(entry_path, timestamp, 'relatorios')
+                    if os.path.exists(candidate):
+                        return candidate, f"{entry}/{timestamp}"
+        return direct_path, timestamp
     if os.path.exists(analise_dir):
-        subdirs = sorted([d for d in os.listdir(analise_dir)
-                          if os.path.isdir(os.path.join(analise_dir, d))], reverse=True)
-        if subdirs:
-            return os.path.join(analise_dir, subdirs[0], 'relatorios'), subdirs[0]
+        # Procura o mais recente tanto na raiz quanto dentro de lotes
+        found = []
+        for d in os.listdir(analise_dir):
+            dp = os.path.join(analise_dir, d)
+            if not os.path.isdir(dp) or d.startswith('.'):
+                continue
+            if os.path.exists(os.path.join(dp, 'relatorios')):
+                found.append((d, os.path.join(dp, 'relatorios'), d))
+            else:
+                for sub in os.listdir(dp):
+                    subp = os.path.join(dp, sub)
+                    if os.path.isdir(subp) and os.path.exists(os.path.join(subp, 'relatorios')):
+                        found.append((sub, os.path.join(subp, 'relatorios'), f"{d}/{sub}"))
+        if found:
+            found.sort(key=lambda x: x[0], reverse=True)
+            return found[0][1], found[0][2]
     return os.path.join(analise_dir, 'relatorios'), 'default'
 
 
 def tool_validate_analise_contract(timestamp: str = None) -> str:
     """Valida se os entregáveis da RTI (index.html e dados_analise.json) existem em analise/<timestamp>/relatorios/
-    e verifica a cobertura de skills recomendadas em relação a decisoes.yaml."""
+    ou analise/<lote>/<timestamp>/relatorios/ e verifica a cobertura de skills recomendadas em relação a decisoes.yaml."""
     root = get_workspace_root()
     rel_dir, ts = _get_relatorios_dir(root, timestamp)
 
@@ -2205,7 +2235,8 @@ def tool_validate_analise_contract(timestamp: str = None) -> str:
             skills_ativas = set(analise_data.get("skills_ativas", []))
 
             # Tentar achar o lote correspondente no decisoes.yaml
-            lote_id = ts.split('_', 2)[2] if len(ts.split('_', 2)) > 2 else ts
+            clean_ts = ts.split('/')[-1]
+            lote_id = clean_ts.split('_', 2)[2] if len(clean_ts.split('_', 2)) > 2 else clean_ts
             with open(decisoes_yaml_path, 'r', encoding='utf-8') as f:
                 decisoes_content = f.read()
 
@@ -2231,30 +2262,43 @@ def tool_validate_analise_contract(timestamp: str = None) -> str:
     return json.dumps(results, indent=2, ensure_ascii=False)
 
 
-def tool_finalize_execution(timestamp: str) -> str:
-    """Move arquivos do lote analisado de entrada/<lote> para analise/<timestamp>/entrada/ e atualiza o índice master."""
+def tool_finalize_execution(timestamp: str, lote: str = None) -> str:
+    """Move arquivos do lote analisado de entrada/<lote> para analise/<lote>/<timestamp>/entrada/ (ou analise/<timestamp>/entrada/) e atualiza o índice master."""
     root = get_workspace_root()
     entrada_dir = os.path.join(root, 'entrada')
 
     if not timestamp:
         return json.dumps({"status": "error", "message": "Parâmetro timestamp é obrigatório."}, ensure_ascii=False)
 
-    dest_entrada = os.path.join(root, 'analise', timestamp, 'entrada')
+    # Detectar o lote
+    parts = timestamp.split('/')
+    if len(parts) > 1:
+        detected_lote = parts[0]
+        actual_ts = parts[1]
+    else:
+        actual_ts = timestamp
+        ts_parts = actual_ts.split('_', 2)
+        detected_lote = lote or (ts_parts[2] if len(ts_parts) > 2 else None)
+
+    if detected_lote:
+        dest_entrada = os.path.join(root, 'analise', detected_lote, actual_ts, 'entrada')
+    else:
+        dest_entrada = os.path.join(root, 'analise', actual_ts, 'entrada')
+
     os.makedirs(dest_entrada, exist_ok=True)
 
     moved = []
-    # Detectar o lote pelo sufixo do timestamp (ex: 20260804_120000_lote-exemplo-rfp → lote-exemplo-rfp)
-    parts = timestamp.split('_', 2)
-    lote_suffix = parts[2] if len(parts) > 2 else None
-    lote_src = os.path.join(entrada_dir, lote_suffix) if lote_suffix else None
+    lote_src = os.path.join(entrada_dir, detected_lote) if detected_lote else None
 
     if lote_src and os.path.exists(lote_src):
-        # Mover toda a pasta do lote
-        dest = os.path.join(dest_entrada, lote_suffix)
-        shutil.move(lote_src, dest)
-        moved.append(lote_suffix)
+        for item in os.listdir(lote_src):
+            if item.startswith('.'):
+                continue
+            src = os.path.join(lote_src, item)
+            dst = os.path.join(dest_entrada, item)
+            shutil.move(src, dst)
+            moved.append(f"{detected_lote}/{item}")
     else:
-        # Fallback: mover arquivos direto de entrada/ (excluindo infraestrutura)
         for item in os.listdir(entrada_dir):
             if item.startswith('.') or item in ('README.md', 'decisoes.yaml'):
                 continue
@@ -2263,6 +2307,7 @@ def tool_finalize_execution(timestamp: str) -> str:
             if os.path.isfile(src):
                 shutil.move(src, dst)
                 moved.append(item)
+
 
     # Garante .gitkeep em entrada/
     gitkeep = os.path.join(entrada_dir, '.gitkeep')
@@ -2365,14 +2410,23 @@ def tool_build_master_index() -> str:
 
     runs = []
 
-    # Escaneia pastas de relatórios por timestamp em ordem decrescente
-    entries = sorted(os.listdir(analise_dir), reverse=True)
-    for ts in entries:
-        ts_dir = os.path.join(analise_dir, ts)
-        rel_dir = os.path.join(ts_dir, 'relatorios')
-        if not os.path.isdir(ts_dir) or not os.path.isdir(rel_dir):
+    # Escaneia pastas de relatórios por lote e timestamp (suporta analise/<timestamp> e analise/<lote>/<timestamp>)
+    candidates = []
+    for entry in sorted(os.listdir(analise_dir), reverse=True):
+        entry_dir = os.path.join(analise_dir, entry)
+        if not os.path.isdir(entry_dir) or entry.startswith('.'):
             continue
+        rel_direct = os.path.join(entry_dir, 'relatorios')
+        if os.path.exists(rel_direct):
+            candidates.append((entry, None, entry_dir, rel_direct))
+        else:
+            for sub_ts in sorted(os.listdir(entry_dir), reverse=True):
+                sub_dir = os.path.join(entry_dir, sub_ts)
+                rel_sub = os.path.join(sub_dir, 'relatorios')
+                if os.path.isdir(sub_dir) and os.path.exists(rel_sub):
+                    candidates.append((sub_ts, entry, sub_dir, rel_sub))
 
+    for ts, lote_parent, ts_dir, rel_dir in candidates:
         json_path = os.path.join(rel_dir, 'dados_analise.json')
         resumo_path = os.path.join(rel_dir, '00_RESUMO_EXECUTIVO.md')
 
@@ -2381,10 +2435,13 @@ def tool_build_master_index() -> str:
         if len(ts) >= 15 and ts[:8].isdigit():
             date_str = f"{ts[6:8]}/{ts[4:6]}/{ts[:4]} às {ts[9:11]}:{ts[11:13]}:{ts[13:15]}"
 
-        # Extrai nome do lote do sufixo do timestamp
-        parts = ts.split('_', 2)
-        raw_lote_name = parts[2].replace('_', ' ') if len(parts) > 2 else ts
-        lote_name = clean_unicode_text(raw_lote_name)
+        # Extrai nome do lote do sufixo do timestamp ou da pasta pai
+        if lote_parent:
+            lote_name = clean_unicode_text(lote_parent.replace('_', ' '))
+        else:
+            parts = ts.split('_', 2)
+            raw_lote_name = parts[2].replace('_', ' ') if len(parts) > 2 else ts
+            lote_name = clean_unicode_text(raw_lote_name)
         title = clean_unicode_text(f"Revisão Técnica — {lote_name}")
 
         # Extrai dados do JSON ou Markdown
@@ -2563,7 +2620,8 @@ def tool_build_master_index() -> str:
             "skills": skills_found,
             "resumo_snippet": resumo_snippet,
             "top_achados": top_achados,
-            "index_html": f"{ts}/relatorios/index.html",
+            "lote_parent": lote_parent,
+            "index_html": f"{lote_parent}/{ts}/relatorios/index.html" if lote_parent else f"{ts}/relatorios/index.html",
             "metrics": {
                 "total_achados": total_achados,
                 "confirmados": adjudication["confirmed"] if data_json else 0,

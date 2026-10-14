@@ -13,10 +13,11 @@ Todo assistente de IA (Antigravity, OpenAI Codex, Cursor, VS Code Copilot) atuan
    - **NUNCA INVENTE OU SUPONHA** requisitos, volumetrias (ex: EPS do SIEM, GB/dia), SLAs, prazos, equipes ou cláusulas contratuais.
    - Se uma informação necessária não constar no documento, registre-a como **Lacuna** e formule uma pergunta formal no relatório `02_ACOES_E_MINUTAS.md`.
 
-2. **Evidência Imutável (Baseline) e Organização por Timestamps:**
+2. **Evidência Imutável (Baseline) e Organização por Lotes e Timestamps:**
    - Toda constatação exige citação de trecho recuperável de texto ou hash SHA-256 de imagem em `entrada/`.
-   - Na inicialização da análise, gera-se um `TIMESTAMP` no formato `YYYYMMDD_HHMMSS_<NOME_DO_LOTE>` e os relatórios são escritos em `analise/<timestamp>/relatorios/`.
-   - Após a conclusão e validação, os arquivos analisados são movidos de `entrada/<lote>/` para `analise/<timestamp>/entrada/` e a Central `analise/index.html` é atualizada.
+   - Na inicialização da análise, organiza-se por pasta de lote e gera-se um `TIMESTAMP` no formato `YYYYMMDD_HHMMSS_<VERSAO>`, escrevendo os relatórios em `analise/<lote>/<timestamp>/relatorios/`.
+   - **Gestão de Versões Múltiplas do Mesmo Documento:** Quando um lote contiver versões sucessivas (série histórica, ex: `v1.0` e `v1.1`), o motor executará rodadas independentes para cada versão e gerará o **Quadro de Reconciliação Técnica e Evolução (Diff de Achados)**, destacando achados sanados, persistentes e novas regressões.
+   - Após a conclusão e validação, os arquivos analisados são movidos de `entrada/<lote>/` para `analise/<lote>/<timestamp>/entrada/` e a Central `analise/index.html` é atualizada.
    - Achados críticos exigem obrigatoriamente Grau de Evidência **E2 (Corroborado)** ou **E3 (Confirmado por confronto direto)**.
 
 3. **Segregação Tridimensional e Abrangência Técnica e Estrutural (7 Pilares Mandatórios):**
@@ -46,10 +47,11 @@ Todo assistente de IA (Antigravity, OpenAI Codex, Cursor, VS Code Copilot) atuan
    - **Execução Isolada por Lote:** Cada lote DEVE ser analisado individualmente em sessão limpa e dedicada para impedir o colapso de contexto e manter a homogeneidade de achados em todos os lotes.
    - **Processamento Autônomo sem Pausas:** Ao processar a pasta `entrada/`, o motor ativará e autorizará AUTOMATICAMENTE 100% das skills recomendadas e auto-gerará rascunhos para novas skills especializadas detectadas, prosseguindo com a análise exaustiva sem questionar o usuário.
    - A seleção de skills baseia-se no **perfil semântico real dos documentos** (ex: `NTP` = `HLD`, `ET` = `LLD`/`RFP`, `Carrier` = `analisar-carrier`).
+   - **Séries Históricas e Múltiplas Versões:** Se o lote contiver mais de uma versão do mesmo documento (ex: v1.0 e v1.1), processe cada versão sequencialmente como uma rodada dedicada e invoque a reconciliação evolutiva para comparar os achados sem misturar os contextos.
    - 100% das **skills recomendadas** no manifesto `decisoes.yaml` DEVEM ser ativadas no `dados_analise.json`. O validador MCP `tool_validate_analise_contract` acusará erro/aviso caso alguma skill seja omitida.
    - Ative `analisar-diagramas` se houver imagens soltas (PNG, JPG, SVG) OU diagramas/esquemas embutidos em `.pdf` e `.docx`.
    - Ative `analisar-planilha` se houver arquivos .xlsx ou .csv no lote.
-   - Correlacione ativamente informações **entre todos os arquivos do mesmo lote**.
+   - Correlacione ativamente informações **entre todos os arquivos do mesmo lote** (exceto quando detectada série temporal de versões do mesmo documento).
    - `run_full_audit` executa controles determinísticos e gera o relatório inicial; não equivale à revisão semântica. Após ele, percorra a matriz `get_semantic_review_manifest`, leia integralmente os blocos da baseline com `get_semantic_document_chunk`, aplique cada skill textual ativa em passagens especializadas e persista escopos/achados por `record_semantic_analysis` antes de finalizar.
 
 8. **Idioma Obrigatório — Português do Brasil (PT-BR):**
