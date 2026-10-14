@@ -18,8 +18,11 @@ Zero hardcodes, 100% dinâmico e seguro.
 """
 
 import os
+import sys
 import re
 import json
+import base64
+import mimetypes
 import unicodedata
 import html
 
@@ -298,22 +301,28 @@ def _parse_findings(pontos_md: str) -> list:
     return findings
 
 
-def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
-    """Compila a Central Executiva HTML a partir de dados_analise.json ou Markdown."""
-    if root_dir is None:
-        root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+def _resolve_image_data_uri_or_path(rel_path: str, base_dir: str = None, max_bytes_inline: int = 4 * 1024 * 1024) -> str:
+    """Retorna data URI em base64 se o arquivo existir localmente para gerar HTML autocontido e portátil."""
+    if not rel_path:
+        return ""
+    if base_dir:
+        full_path = os.path.join(base_dir, rel_path)
+        if os.path.isfile(full_path):
+            try:
+                size = os.path.getsize(full_path)
+                if size <= max_bytes_inline:
+                    ext = os.path.splitext(full_path)[1].lower()
+                    mime = mimetypes.guess_type(full_path)[0] or "image/png"
+                    if ext == ".svg":
+                        mime = "image/svg+xml"
+                    with open(full_path, "rb") as f:
+                        b64 = base64.b64encode(f.read()).decode("ascii")
+                    return f"data:{mime};base64,{b64}"
+            except Exception:
+                pass
+    return f"./{rel_path}"
 
-    rel_dir = os.path.join(root_dir, 'analise', timestamp, 'relatorios')
-    output_path = os.path.join(rel_dir, 'index.html')
-    json_path = os.path.join(rel_dir, 'dados_analise.json')
 
-    if not os.path.exists(rel_dir):
-        return f"Diretório não encontrado: {rel_dir}"
-
-    lote_name = timestamp.split('_', 2)[2].replace('_', ' ') if len(timestamp.split('_', 2)) > 2 else timestamp
-    data_fmt = f"{timestamp[6:8]}/{timestamp[4:6]}/{timestamp[:4]}" if len(timestamp) >= 8 else timestamp
-
-    # 1. Tenta carregar dados_analise.json
 def _build_resumo_html(data_json: dict) -> str:
     resumo_md = data_json.get("resumo_md", "").strip()
     if resumo_md and not data_json.get("adjudication_summary"):
@@ -612,7 +621,7 @@ def _build_checklists_html(data_json: dict) -> str:
     return html_out
 
 
-def _build_rastrea_html(data_json: dict) -> str:
+def _build_rastrea_html(data_json: dict, rel_dir: str = None) -> str:
     rastrea_md = data_json.get("rastrea_md", "").strip()
     if rastrea_md:
         return _md_to_html_simple(rastrea_md, linkify_ids=False)
@@ -646,7 +655,8 @@ def _build_rastrea_html(data_json: dict) -> str:
         digest = html.escape(str(asset.get("sha256", "")))
         path = html.escape(rel, quote=True)
         mime_type = str(asset.get("mime_type", ""))
-        preview = f'<img src="./{path}" alt="{label}" loading="lazy">' if mime_type.startswith("image/") else '<span class="visual-file-icon">Arquivo vetorial estruturado</span>'
+        img_src = _resolve_image_data_uri_or_path(rel, rel_dir) if mime_type.startswith("image/") else f"./{path}"
+        preview = f'<img src="{img_src}" alt="{label}" loading="lazy">' if mime_type.startswith("image/") else '<span class="visual-file-icon">Arquivo vetorial estruturado</span>'
         page = asset.get("page")
         dimensions = f"{asset.get('width')} × {asset.get('height')}" if asset.get("width") and asset.get("height") else "dimensão não identificada"
         ocr_text = str(asset.get("ocr_text", "")).strip()
@@ -782,7 +792,7 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
         acoes_html = _build_acoes_html(data_json)
         lacunas_html = _build_lacunas_html(data_json)
         checklists_html = _build_checklists_html(data_json)
-        rastrea_html = _build_rastrea_html(data_json)
+        rastrea_html = _build_rastrea_html(data_json, rel_dir=rel_dir)
     else:
         resumo_md = _read_md(rel_dir, '00_RESUMO_EXECUTIVO.md')
         pontos_md = _read_md(rel_dir, '01_PONTOS_DE_ATENCAO.md')
@@ -989,15 +999,36 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
             visual_asset_id = html.escape(str(f.get("visual_asset_id", "")))
             visual_hash = html.escape(str(f.get("visual_sha256", "")))
             visual_page = f" · página {f.get('visual_page')}" if f.get("visual_page") else ""
+            img_src = _resolve_image_data_uri_or_path(visual_file, rel_dir)
             if os.path.splitext(visual_file)[1].lower() in (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg"):
-                visual_preview = f'<a href="./{safe_visual_file}" target="_blank" rel="noopener"><img src="./{safe_visual_file}" alt="Evidência visual {visual_asset_id}" loading="lazy"></a>'
+                visual_preview = f'<a href="./{safe_visual_file}" target="_blank" rel="noopener"><img src="{img_src}" alt="Evidência visual {visual_asset_id}" loading="lazy"></a>'
             else:
                 visual_preview = f'<a href="./{safe_visual_file}" target="_blank" rel="noopener">Abrir artefato {visual_asset_id}</a>'
+
+            confronto_html = ""
+            texto_afirmado = f.get("texto_afirmado", "")
+            diagrama_demonstrado = f.get("diagrama_demonstrado", "")
+            if texto_afirmado or diagrama_demonstrado:
+                confronto_html = f"""
+                <div class="confronto-diagrama-box" style="margin-top:10px;border-radius:6px;overflow:hidden;border:1px solid #cbd5e1;">
+                  <table style="width:100%;font-size:.82rem;margin:0;border-collapse:collapse;">
+                    <tr style="background:#f8fafc;border-bottom:1px solid #cbd5e1;">
+                      <th style="padding:6px 10px;text-align:left;width:50%;color:#475569;"><i class="fa-solid fa-file-lines"></i> Afirmação no Texto (Documento)</th>
+                      <th style="padding:6px 10px;text-align:left;width:50%;color:#475569;"><i class="fa-solid fa-diagram-project"></i> Ilustração no Diagrama / Topologia</th>
+                    </tr>
+                    <tr>
+                      <td style="padding:8px 10px;vertical-align:top;background:#fff;border-right:1px solid #cbd5e1;">{html.escape(str(texto_afirmado))}</td>
+                      <td style="padding:8px 10px;vertical-align:top;background:#fff;">{html.escape(str(diagrama_demonstrado))}</td>
+                    </tr>
+                  </table>
+                </div>"""
+
             visual_evidence_html = f"""
             <div class="visual-evidence">
               <strong>Evidência visual:</strong> {visual_asset_id}{visual_page}<br>
               {visual_preview}
               <small>SHA-256: <code>{visual_hash}</code></small>
+              {confronto_html}
             </div>"""
 
         semantic_skill = str(f.get("semantic_skill", ""))

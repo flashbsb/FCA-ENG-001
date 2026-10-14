@@ -8,7 +8,8 @@ Este módulo fornece um servidor **MCP (Model Context Protocol)** nativo em Pyth
 
 | Ferramenta MCP | Descrição |
 |---|---|
-| `profile_baseline` | Realiza a triagem adaptativa de `entrada/`: detecta domínios, mapeia checklists ativos/inaplicáveis e recomenda/sugere skills. |
+| `profile_baseline` | Realiza a triagem adaptativa de `entrada/`: detecta domínios, mapeia checklists ativos/inaplicáveis, audita o ambiente (SO/Python) e recomenda skills. |
+| `check_environment` | Audita proativamente dependências Python e utilitários do SO (poppler-utils, tesseract-ocr) e sugere comandos para destravar 100% de capacidade. |
 | `run_full_audit` | Executa os controles determinísticos, prepara o SSOT/HTML, baseline com hashes e matriz de escopos semânticos pendentes. |
 | `get_semantic_review_manifest` | Expõe a matriz skill/documento, progresso e achados existentes para orientar as passagens semânticas do modelo revisor. |
 | `get_semantic_document_chunk` | Entrega blocos paginados com localização e SHA-256 conferido contra a baseline imutável. |

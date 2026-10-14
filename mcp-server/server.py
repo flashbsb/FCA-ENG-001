@@ -808,6 +808,144 @@ def auto_scaffold_missing_skills(profiles: list):
                             pass
 
 
+def check_environment_capabilities() -> dict:
+    """Verifica proativamente pacotes Python e utilitários do SO para potencializar as análises do framework."""
+    python_caps = {}
+
+    # openpyxl
+    try:
+        import openpyxl
+        python_caps["openpyxl"] = {
+            "installed": True,
+            "version": getattr(openpyxl, "__version__", "detectado"),
+            "status": "ativo",
+            "capability": "Extração precisa de células, fórmulas, abas e planilhas .xlsx/.xls"
+        }
+    except ImportError:
+        python_caps["openpyxl"] = {
+            "installed": False,
+            "status": "fallback ativo (leitura nativa via XML)",
+            "capability": "Extração precisa de planilhas",
+            "install_cmd": "pip install openpyxl"
+        }
+
+    # pypdf
+    try:
+        import pypdf
+        python_caps["pypdf"] = {
+            "installed": True,
+            "version": getattr(pypdf, "__version__", "detectado"),
+            "status": "ativo",
+            "capability": "Extração de fluxos de texto e imagens embutidas em documentos .pdf"
+        }
+    except ImportError:
+        python_caps["pypdf"] = {
+            "installed": False,
+            "status": "inativo (documentos PDF serão extraídos via fallback)",
+            "capability": "Extração de texto e imagens em PDF",
+            "install_cmd": "pip install pypdf"
+        }
+
+    # Pillow (PIL)
+    try:
+        from PIL import Image
+        import PIL
+        python_caps["Pillow"] = {
+            "installed": True,
+            "version": getattr(PIL, "__version__", "detectado"),
+            "status": "ativo",
+            "capability": "Inspeção de dimensões, formato e conversão de diagramas/imagens"
+        }
+    except ImportError:
+        python_caps["Pillow"] = {
+            "installed": False,
+            "status": "inativo",
+            "capability": "Processamento avançado de imagens e diagramas",
+            "install_cmd": "pip install Pillow"
+        }
+
+    # Utilitários do SO (Linux)
+    so_caps = {}
+    pdftoppm_bin = os.environ.get("FCA_PDFTOPPM") or shutil.which("pdftoppm")
+    if pdftoppm_bin:
+        so_caps["poppler-utils (pdftoppm)"] = {
+            "installed": True,
+            "path": pdftoppm_bin,
+            "status": "ativo",
+            "capability": "Renderização de páginas inteiras de PDF contendo diagramas, arquiteturas e topologias"
+        }
+    else:
+        so_caps["poppler-utils (pdftoppm)"] = {
+            "installed": False,
+            "status": "inativo (páginas de PDF com diagramas complexos não serão renderizadas como imagens)",
+            "capability": "Renderização visual de páginas PDF",
+            "install_cmd": "sudo apt install -y poppler-utils"
+        }
+
+    tesseract_bin = os.environ.get("FCA_TESSERACT") or shutil.which("tesseract")
+    if tesseract_bin:
+        langs = []
+        try:
+            res = subprocess.run([tesseract_bin, "--list-langs"], capture_output=True, text=True, timeout=5, check=False)
+            if res.returncode == 0:
+                langs = [l.strip() for l in res.stdout.splitlines()[1:] if l.strip()]
+        except Exception:
+            pass
+        so_caps["tesseract-ocr"] = {
+            "installed": True,
+            "path": tesseract_bin,
+            "languages": langs,
+            "has_portuguese": "por" in langs,
+            "status": "ativo" if "por" in langs else "alerta: suporte ao idioma português ('por') não instalado",
+            "capability": "OCR de rótulos de rede, tabelas e textos em diagramas/imagens (PNG, JPG)"
+        }
+    else:
+        so_caps["tesseract-ocr"] = {
+            "installed": False,
+            "status": "inativo (OCR de imagens desabilitado)",
+            "capability": "Reconhecimento óptico de caracteres em diagramas",
+            "install_cmd": "sudo apt install -y tesseract-ocr tesseract-ocr-por"
+        }
+
+    # Recomendações agregadas
+    missing_so = [k for k, v in so_caps.items() if not v["installed"]]
+    missing_py = [k for k, v in python_caps.items() if not v["installed"]]
+
+    quick_fix = []
+    if missing_so:
+        apt_pkgs = []
+        if not so_caps["poppler-utils (pdftoppm)"]["installed"]:
+            apt_pkgs.append("poppler-utils")
+        if not so_caps["tesseract-ocr"]["installed"]:
+            apt_pkgs.extend(["tesseract-ocr", "tesseract-ocr-por"])
+        if apt_pkgs:
+            quick_fix.append(f"sudo apt update && sudo apt install -y {' '.join(apt_pkgs)}")
+
+    if missing_py:
+        quick_fix.append(f"pip install {' '.join(missing_py)}")
+
+    full_multimodal_ready = len(missing_so) == 0 and len(missing_py) == 0
+
+    return {
+        "python_environment": {
+            "version": sys.version.split()[0],
+            "packages": python_caps
+        },
+        "system_tools": so_caps,
+        "full_multimodal_ready": full_multimodal_ready,
+        "recommendations": quick_fix if quick_fix else ["Ambiente 100% potencializado para análises textuais, tabulares e multimodais."]
+    }
+
+
+def tool_check_environment() -> str:
+    """Audita dependências do SO e Python e retorna matriz de capacidades e comandos de instalação."""
+    caps = check_environment_capabilities()
+    return json.dumps({
+        "status": "success",
+        "capabilities": caps
+    }, indent=2, ensure_ascii=False)
+
+
 def tool_profile_baseline(lote_path: str = None) -> str:
     """
     Triagem adaptativa do lote: detecta domínios semanticamente, mapeia checklists,
@@ -910,6 +1048,7 @@ def tool_profile_baseline(lote_path: str = None) -> str:
         "status": "success",
         "mode": mode,
         "total_lotes": len(profiles),
+        "environment_capabilities": check_environment_capabilities(),
         "profiles": profiles,
         "decisoes_yaml": "entrada/decisoes.yaml"
     }, indent=2, ensure_ascii=False)
@@ -2770,6 +2909,11 @@ TOOLS_MANIFEST = [
         "description": "Recompila analise/index.html e analise/manifest.json varrendo todos os relatórios.",
         "inputSchema": {"type": "object", "properties": {}, "required": []}
     },
+    {
+        "name": "check_environment",
+        "description": "Audita o ambiente (pacotes Python e utilitários do SO como poppler-utils e tesseract) e retorna a matriz de prontidão analítica.",
+        "inputSchema": {"type": "object", "properties": {}, "required": []}
+    },
 ]
 
 
@@ -2782,6 +2926,8 @@ def dispatch_tool(name: str, args: dict) -> str:
         return tool_freeze_baseline(args.get("lote_path"))
     elif name == "profile_baseline":
         return tool_profile_baseline(args.get("lote_path"))
+    elif name == "check_environment":
+        return tool_check_environment()
     elif name == "run_full_audit":
         return tool_run_full_audit(args.get("lote_path"))
     elif name == "record_visual_analysis":

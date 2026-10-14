@@ -159,7 +159,8 @@ entrada/
 ```
 
 **Ferramentas expostas:**
-- `profile_baseline` — triagem semântica adaptativa
+- `profile_baseline` — triagem semântica adaptativa e diagnóstico do ambiente
+- `check_environment` — auditoria de pacotes Python e utilitários do SO (poppler-utils, tesseract-ocr)
 - `freeze_baseline` — hashes SHA-256 por lote
 - `extract_docx_summary` — estrutura de .docx
 - `extract_xlsx_summary` — abas e dados de .xlsx

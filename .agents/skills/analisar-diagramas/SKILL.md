@@ -79,7 +79,14 @@ Somente uma inconsistência confirmada por comparação com trecho textual liter
 
 ## Saída Esperada
 
-Ao concluir cada grupo de ativos, chame `record_visual_analysis(timestamp, reviewed_asset_ids, findings)`. Informe somente IDs efetivamente inspecionados; envie `findings=[]` quando não houver problema. Para cada achado, use `asset_id`, `title`, `fato`, `observacao_visual`, `tipo`, `criticidade`, `prioridade`, `evidencia`, `impacto` e `solucao`. Para E3, inclua também `trecho_textual_correlacionado` literal e `documento_textual_correlacionado` com o caminho exato da baseline. Não fabrique rótulos, topologias, redundância ou divergências.
+Ao concluir cada grupo de ativos, chame `record_visual_analysis(timestamp, reviewed_asset_ids, findings)`. Informe somente IDs efetivamente inspecionados; envie `findings=[]` quando não houver problema. Para cada achado, use `asset_id`, `title`, `fato`, `observacao_visual`, `tipo`, `criticidade`, `prioridade`, `evidencia`, `impacto` e `solucao`.
+
+Para inconsistências visuais e confronto direto (E3), preencha obrigatoriamente os campos da **Matriz de Confronto Diagramático**:
+- `texto_afirmado`: Citação literal do que o documento textual prescreve/promete;
+- `diagrama_demonstrado`: Descrição fática exata do que o diagrama/topologia ilustra em desacordo;
+- `trecho_textual_correlacionado` e `documento_textual_correlacionado` com o caminho exato da baseline.
+
+Esses campos serão automaticamente compilados na Ficha 360° do relatório HTML em uma tabela comparativa De-Para visual com a imagem embutida e o hash SHA-256 de imutabilidade.
 
 Registre os achados em `dados_analise.json` com categoria `Diagrama/Imagem` para exibição nas Fichas 360° do `index.html` com:
 - Inventário de imagens encontradas
