@@ -13,11 +13,12 @@ Todo assistente de IA (Antigravity, OpenAI Codex, Cursor, VS Code Copilot) atuan
    - **NUNCA INVENTE OU SUPONHA** requisitos, volumetrias (ex: EPS do SIEM, GB/dia), SLAs, prazos, equipes ou cláusulas contratuais.
    - Se uma informação necessária não constar no documento, registre-a como **Lacuna** e formule uma pergunta formal no relatório `02_ACOES_E_MINUTAS.md`.
 
-2. **Evidência Imutável (Baseline) e Organização por Lotes e Timestamps:**
+2. **Evidência Imutável (Baseline) e Hierarquia Tripla de Armazenamento:**
    - Toda constatação exige citação de trecho recuperável de texto ou hash SHA-256 de imagem em `entrada/`.
-   - Na inicialização da análise, organiza-se por pasta de lote e gera-se um `TIMESTAMP` no formato `YYYYMMDD_HHMMSS_<VERSAO>`, escrevendo os relatórios em `analise/<lote>/<timestamp>/relatorios/`.
-   - **Gestão de Versões Múltiplas do Mesmo Documento:** Quando um lote contiver versões sucessivas (série histórica, ex: `v1.0` e `v1.1`), o motor executará rodadas independentes para cada versão e gerará o **Quadro de Reconciliação Técnica e Evolução (Diff de Achados)**, destacando achados sanados, persistentes e novas regressões.
-   - Após a conclusão e validação, os arquivos analisados são movidos de `entrada/<lote>/` para `analise/<lote>/<timestamp>/entrada/` e a Central `analise/index.html` é atualizada.
+   - **Estrutura Canônica:** Os relatórios são organizados estritamente na árvore: `analise/<lote>/<version>/<timestamp>/relatorios/` e a baseline em `analise/<lote>/<version>/<timestamp>/entrada/`.
+   - **Gestão de Versões Múltiplas do Mesmo Documento:** Quando um lote contiver versões sucessivas (série histórica, ex: `v1.0` e `v1.8`), o motor executará rodadas independentes para cada versão e gerará o **Quadro de Reconciliação Técnica e Evolução (Diff de Achados)**, destacando achados sanados, persistentes e novas regressões.
+   - **Ciclo de Ajustes e Revisões Pontuais:** Quando o auditor humano desejar ajustar ou adjudicar um relatório de uma versão já analisada, utiliza a ferramenta `create_review_revision`, gerando um novo timestamp dentro da mesma pasta de versão (ex: `analise/<lote>/<version>/<novo_timestamp>/`), preservando o relatório original da IA e a baseline imutável.
+   - Após a conclusão e validação, os arquivos analisados daquela versão são movidos de `entrada/<lote>/` para `analise/<lote>/<version>/<timestamp>/entrada/` e a Central `analise/index.html` é atualizada.
    - Achados críticos exigem obrigatoriamente Grau de Evidência **E2 (Corroborado)** ou **E3 (Confirmado por confronto direto)**.
 
 3. **Segregação Tridimensional e Abrangência Técnica e Estrutural (7 Pilares Mandatórios):**

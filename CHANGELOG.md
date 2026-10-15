@@ -4,6 +4,25 @@ Todas as alterações graduais, correções e melhorias arquiteturais implementa
 
 ---
 
+## [1.3.0] - 2026-10-14
+### Adicionado
+- **Hierarquia Tripla Canônica (`analise/<lote>/<version>/<timestamp>/`):**
+  - Estruturação do armazenamento em três níveis semânticos claros:
+    - `<lote>`: Pacote de contratação ou escopo técnico (ex.: `03_HLD_NUTANIX`).
+    - `<version>`: Versão do artefato entregue pelo fornecedor (ex.: `v1.0`, `v1.8`, `v1.8.2`).
+    - `<timestamp>`: Rodada de auditoria da IA ou ciclo de revisão/adjudicação humana (ex.: `20261014_210000`).
+- **Ciclo de Revisão e Adjudicação Humana (`create_review_revision`):**
+  - Nova ferramenta MCP que permite ao auditor criar uma rodada pontual de revisão sob a mesma versão do documento sem sobrescrever a análise original da IA.
+  - Clona o `dados_analise.json` e a pasta `entrada/` preservando a baseline e registrando trilha de auditoria (`audit_trail`), permitindo adjudicações de falsos positivos, ajustes de severidade e inclusão de observações manuais em um novo timestamp histórico.
+- **Resolução Universal Flexível de Diretórios (`_resolve_analysis_dirs`):**
+  - Todas as funções MCP (`tool_adjudicate_findings`, `tool_record_semantic_analysis`, `tool_build_run_index_html`, `tool_validate_analise_contract`, `tool_finalize_execution`) resolvem de forma dinâmica tanto o caminho relativo completo quanto o timestamp isolado da folha via busca recursiva de até 4 níveis.
+- **Isolamento Estrito de Séries Históricas na Finalização:**
+  - `tool_finalize_execution` identifica os arquivos da baseline pertencentes exclusivamente àquela versão específica, movendo apenas os artefatos analisados e preservando as demais versões em `entrada/` para suas respectivas rodadas.
+- **Portal Master com Visão Hierárquica e Badges:**
+  - `tool_build_master_index` enriquecido com detecção de versão (`v1.0`, `v1.8`) e badges distintivos para versões de documento e rodadas de revisão adjudicadas.
+
+---
+
 ## [1.2.0] - 2026-10-14
 ### Adicionado
 - **Hierarquia por Lotes no Armazenamento (`analise/<lote>/<timestamp>/`):** 

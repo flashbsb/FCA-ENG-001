@@ -54,6 +54,66 @@ def get_workspace_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _is_valid_analysis_identifier(ident: str) -> bool:
+    """Valida se o identificador ou caminho relativo de análise é seguro e válido."""
+    if not ident or not isinstance(ident, str):
+        return False
+    clean = ident.replace('\\', '/').strip('/')
+    parts = clean.split('/')
+    if not parts or len(parts) > 5:
+        return False
+    for p in parts:
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", p):
+            return False
+    return True
+
+
+def _resolve_analysis_dirs(root: str, timestamp_or_path: str = None) -> tuple:
+    """
+    Resolve os diretórios da análise com suporte a múltiplas profundidades:
+    1. analise/<lote>/<version>/<timestamp>/
+    2. analise/<lote>/<timestamp>/
+    3. analise/<timestamp>/
+    Ou via busca recursiva pelo timestamp puro da folha.
+    Retorna: (analysis_dir, relatorios_dir, entrada_dir, rel_path)
+    """
+    analise_root = os.path.join(root, 'analise')
+    if timestamp_or_path:
+        clean = timestamp_or_path.strip().replace('\\', '/')
+        direct_path = os.path.join(analise_root, clean)
+        direct_rel = os.path.join(direct_path, 'relatorios')
+        if os.path.isdir(direct_rel):
+            return direct_path, direct_rel, os.path.join(direct_path, 'entrada'), clean
+        
+        # Busca recursiva se fornecido apenas o timestamp da folha ou caminho parcial
+        target_leaf = clean.split('/')[-1]
+        for dirpath, dirnames, _ in os.walk(analise_root):
+            if os.path.basename(dirpath) == target_leaf and 'relatorios' in dirnames:
+                candidate_rel = os.path.join(dirpath, 'relatorios')
+                if os.path.isdir(candidate_rel):
+                    rel_p = os.path.relpath(dirpath, analise_root).replace('\\', '/')
+                    return dirpath, candidate_rel, os.path.join(dirpath, 'entrada'), rel_p
+
+        # Fallback para o caminho direto esperado
+        return direct_path, direct_rel, os.path.join(direct_path, 'entrada'), clean
+
+    # Se nenhum timestamp fornecido, encontra o mais recente
+    found = []
+    if os.path.exists(analise_root):
+        for dirpath, dirnames, filenames in os.walk(analise_root):
+            if os.path.basename(dirpath) == 'relatorios' and ('dados_analise.json' in filenames or 'index.html' in filenames):
+                run_dir = os.path.dirname(dirpath)
+                rel_p = os.path.relpath(run_dir, analise_root).replace('\\', '/')
+                mtime = os.path.getmtime(dirpath)
+                found.append((mtime, run_dir, dirpath, os.path.join(run_dir, 'entrada'), rel_p))
+    if found:
+        found.sort(key=lambda x: x[0], reverse=True)
+        return found[0][1], found[0][2], found[0][3], found[0][4]
+
+    def_dir = os.path.join(analise_root, 'default')
+    return def_dir, os.path.join(def_dir, 'relatorios'), os.path.join(def_dir, 'entrada'), 'default'
+
+
 def ensure_infrastructure(root: str = None):
     """Garante que entrada/ e analise/ existam com README e .gitkeep."""
     if root is None:
@@ -2159,43 +2219,13 @@ def tool_extract_xlsx_summary(filename: str, lote_path: str = None) -> str:
 
 
 def _get_relatorios_dir(root: str, timestamp: str = None) -> tuple:
-    analise_dir = os.path.join(root, 'analise')
-    if timestamp:
-        direct_path = os.path.join(analise_dir, timestamp, 'relatorios')
-        if os.path.exists(direct_path):
-            return direct_path, timestamp
-        # Procura em subpastas de lotes: analise/<lote>/<timestamp>/relatorios
-        if os.path.exists(analise_dir):
-            for entry in os.listdir(analise_dir):
-                entry_path = os.path.join(analise_dir, entry)
-                if os.path.isdir(entry_path):
-                    candidate = os.path.join(entry_path, timestamp, 'relatorios')
-                    if os.path.exists(candidate):
-                        return candidate, f"{entry}/{timestamp}"
-        return direct_path, timestamp
-    if os.path.exists(analise_dir):
-        # Procura o mais recente tanto na raiz quanto dentro de lotes
-        found = []
-        for d in os.listdir(analise_dir):
-            dp = os.path.join(analise_dir, d)
-            if not os.path.isdir(dp) or d.startswith('.'):
-                continue
-            if os.path.exists(os.path.join(dp, 'relatorios')):
-                found.append((d, os.path.join(dp, 'relatorios'), d))
-            else:
-                for sub in os.listdir(dp):
-                    subp = os.path.join(dp, sub)
-                    if os.path.isdir(subp) and os.path.exists(os.path.join(subp, 'relatorios')):
-                        found.append((sub, os.path.join(subp, 'relatorios'), f"{d}/{sub}"))
-        if found:
-            found.sort(key=lambda x: x[0], reverse=True)
-            return found[0][1], found[0][2]
-    return os.path.join(analise_dir, 'relatorios'), 'default'
+    analysis_dir, rel_dir, ent_dir, rel_path = _resolve_analysis_dirs(root, timestamp)
+    return rel_dir, rel_path
 
 
 def tool_validate_analise_contract(timestamp: str = None) -> str:
     """Valida se os entregáveis da RTI (index.html e dados_analise.json) existem em analise/<timestamp>/relatorios/
-    ou analise/<lote>/<timestamp>/relatorios/ e verifica a cobertura de skills recomendadas em relação a decisoes.yaml."""
+    ou analise/<lote>/<version>/<timestamp>/relatorios/ e verifica a cobertura de skills recomendadas em relação a decisoes.yaml."""
     root = get_workspace_root()
     rel_dir, ts = _get_relatorios_dir(root, timestamp)
 
@@ -2262,65 +2292,78 @@ def tool_validate_analise_contract(timestamp: str = None) -> str:
     return json.dumps(results, indent=2, ensure_ascii=False)
 
 
-def tool_finalize_execution(timestamp: str, lote: str = None) -> str:
-    """Move arquivos do lote analisado de entrada/<lote> para analise/<lote>/<timestamp>/entrada/ (ou analise/<timestamp>/entrada/) e atualiza o índice master."""
+def tool_finalize_execution(timestamp: str, lote: str = None, version: str = None) -> str:
+    """
+    Move arquivos do lote analisado de entrada/<lote> para analise/<lote>/<version>/<timestamp>/entrada/
+    e atualiza o portal master index.
+    """
     root = get_workspace_root()
     entrada_dir = os.path.join(root, 'entrada')
 
     if not timestamp:
         return json.dumps({"status": "error", "message": "Parâmetro timestamp é obrigatório."}, ensure_ascii=False)
 
-    # Detectar o lote
-    parts = timestamp.split('/')
-    if len(parts) > 1:
-        detected_lote = parts[0]
-        actual_ts = parts[1]
-    else:
-        actual_ts = timestamp
-        ts_parts = actual_ts.split('_', 2)
-        detected_lote = lote or (ts_parts[2] if len(ts_parts) > 2 else None)
-
-    if detected_lote:
-        dest_entrada = os.path.join(root, 'analise', detected_lote, actual_ts, 'entrada')
-    else:
-        dest_entrada = os.path.join(root, 'analise', actual_ts, 'entrada')
-
+    analysis_dir, rel_dir, dest_entrada, rel_path = _resolve_analysis_dirs(root, timestamp)
     os.makedirs(dest_entrada, exist_ok=True)
 
-    moved = []
-    lote_src = os.path.join(entrada_dir, detected_lote) if detected_lote else None
-
-    if lote_src and os.path.exists(lote_src):
-        for item in os.listdir(lote_src):
-            if item.startswith('.'):
-                continue
-            src = os.path.join(lote_src, item)
-            dst = os.path.join(dest_entrada, item)
-            shutil.move(src, dst)
-            moved.append(f"{detected_lote}/{item}")
+    parts = rel_path.split('/')
+    if len(parts) >= 3:
+        detected_lote = parts[0]
+        detected_version = parts[1]
+    elif len(parts) == 2:
+        detected_lote = parts[0]
+        detected_version = version or "v1.0"
     else:
-        for item in os.listdir(entrada_dir):
+        detected_lote = lote
+        detected_version = version or "v1.0"
+
+    moved = []
+    src_lote_dir = os.path.join(entrada_dir, detected_lote) if detected_lote else entrada_dir
+
+    json_path = os.path.join(rel_dir, "dados_analise.json")
+    baseline_filenames = []
+    if os.path.isfile(json_path):
+        try:
+            with open(json_path, 'r', encoding='utf-8') as f:
+                d = json.load(f)
+                for bf in d.get("baseline_files", []):
+                    fn = bf.get("name") or os.path.basename(bf.get("path", ""))
+                    if fn:
+                        baseline_filenames.append(fn)
+        except Exception:
+            pass
+
+    if os.path.isdir(src_lote_dir):
+        for item in os.listdir(src_lote_dir):
             if item.startswith('.') or item in ('README.md', 'decisoes.yaml'):
                 continue
-            src = os.path.join(entrada_dir, item)
+            src = os.path.join(src_lote_dir, item)
+            if not os.path.isfile(src):
+                continue
+            if baseline_filenames and item not in baseline_filenames:
+                continue
             dst = os.path.join(dest_entrada, item)
-            if os.path.isfile(src):
-                shutil.move(src, dst)
-                moved.append(item)
+            shutil.copy2(src, dst)
+            os.remove(src)
+            moved.append(f"{detected_lote}/{item}" if detected_lote else item)
 
+        rem_files = [f for f in os.listdir(src_lote_dir) if not f.startswith('.') and f not in ('README.md', 'decisoes.yaml')]
+        if not rem_files and src_lote_dir != entrada_dir:
+            try:
+                shutil.rmtree(src_lote_dir)
+            except Exception:
+                pass
 
-    # Garante .gitkeep em entrada/
     gitkeep = os.path.join(entrada_dir, '.gitkeep')
     if not os.path.exists(gitkeep):
         with open(gitkeep, 'w') as f:
             f.write('')
 
-    # Recompila HTML e atualiza master index
-    html_result = tool_build_run_index_html(timestamp)
+    html_result = tool_build_run_index_html(rel_path)
     master_result = tool_build_master_index()
 
     return json.dumps({
-        "status": "success", "timestamp": timestamp,
+        "status": "success", "timestamp": rel_path,
         "moved": moved, "dest_entrada": dest_entrada,
         "html": json.loads(html_result),
         "master": json.loads(master_result)
@@ -2330,7 +2373,7 @@ def tool_finalize_execution(timestamp: str, lote: str = None) -> str:
 def tool_build_run_index_html(timestamp: str) -> str:
     """Compila o HTML executivo da análise a partir do dados_analise.json SSOT."""
     root = get_workspace_root()
-    rel_dir = os.path.join(root, 'analise', timestamp, 'relatorios')
+    analysis_dir, rel_dir, ent_dir, rel_path = _resolve_analysis_dirs(root, timestamp)
 
     if not os.path.exists(rel_dir):
         return json.dumps({"status": "error", "message": f"Diretório não encontrado: {rel_dir}"}, ensure_ascii=False)
@@ -2338,10 +2381,99 @@ def tool_build_run_index_html(timestamp: str) -> str:
     try:
         sys.path.insert(0, os.path.dirname(__file__))
         import html_compiler
-        result = html_compiler.compile_timestamp_html(timestamp, root_dir=root)
+        result = html_compiler.compile_timestamp_html(rel_path, root_dir=root)
         return json.dumps({"status": "success", "message": result}, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+
+
+def tool_create_review_revision(source_analysis: str, reason: str = "Ajuste e Adjudicação de Relatório", reviewer: str = "auditor") -> str:
+    """
+    Cria uma nova rodada de revisão/adjudicação a partir de um relatório existente,
+    preservando o histórico e gerando um novo timestamp na mesma versão de documento:
+    analise/<lote>/<version>/<novo_timestamp>/
+    """
+    root = get_workspace_root()
+    src_dir, src_rel, src_ent, src_relpath = _resolve_analysis_dirs(root, source_analysis)
+    
+    if not os.path.isdir(src_dir) or not os.path.isdir(src_rel):
+        return json.dumps({"status": "error", "message": f"Análise de origem não encontrada: {source_analysis}"}, ensure_ascii=False)
+        
+    src_json = os.path.join(src_rel, "dados_analise.json")
+    if not os.path.isfile(src_json):
+        return json.dumps({"status": "error", "message": "dados_analise.json não encontrado na análise de origem."}, ensure_ascii=False)
+        
+    with open(src_json, "r", encoding="utf-8") as f:
+        data = json.load(f)
+        
+    parts = src_relpath.split('/')
+    if len(parts) >= 3:
+        lote = parts[0]
+        version = parts[1]
+    elif len(parts) == 2:
+        lote = parts[0]
+        version = data.get("metadata", {}).get("versao_documento", "v1.0")
+    else:
+        lote = data.get("metadata", {}).get("lote", "lote_geral")
+        version = data.get("metadata", {}).get("versao_documento", "v1.0")
+
+    now = datetime.datetime.now()
+    new_ts = now.strftime("%Y%m%d_%H%M%S") + "_revisao"
+    
+    dest_dir = os.path.join(root, "analise", lote, version, new_ts)
+    dest_rel = os.path.join(dest_dir, "relatorios")
+    dest_ent = os.path.join(dest_dir, "entrada")
+    
+    os.makedirs(dest_rel, exist_ok=True)
+    os.makedirs(dest_ent, exist_ok=True)
+    
+    if os.path.isdir(src_ent):
+        for item in os.listdir(src_ent):
+            s = os.path.join(src_ent, item)
+            d = os.path.join(dest_ent, item)
+            if os.path.isfile(s):
+                shutil.copy2(s, d)
+                
+    src_inv = os.path.join(src_rel, "inventario_visual.json")
+    if os.path.isfile(src_inv):
+        shutil.copy2(src_inv, os.path.join(dest_rel, "inventario_visual.json"))
+        
+    audit_trail = data.get("audit_trail", [])
+    audit_trail.append({
+        "event": "revision_created",
+        "parent_analysis": src_relpath,
+        "created_at": now.isoformat(),
+        "reason": reason,
+        "reviewer": reviewer
+    })
+    data["audit_trail"] = audit_trail
+    data["parent_analysis"] = src_relpath
+    data["timestamp"] = f"{lote}/{version}/{new_ts}"
+    data["revision_timestamp"] = new_ts
+    if "metadata" not in data or not isinstance(data["metadata"], dict):
+        data["metadata"] = {}
+    data["metadata"]["timestamp"] = new_ts
+    data["metadata"]["lote"] = lote
+    data["metadata"]["versao_documento"] = version
+    data["metadata"]["rodada_tipo"] = "revisao_adjudicada"
+    
+    dest_json = os.path.join(dest_rel, "dados_analise.json")
+    with open(dest_json, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+        
+    import html_compiler
+    html_compiler.compile_timestamp_html(f"{lote}/{version}/{new_ts}", root_dir=root)
+    tool_build_master_index()
+    
+    return json.dumps({
+        "status": "success",
+        "message": "Nova rodada de revisão criada com sucesso.",
+        "parent_analysis": src_relpath,
+        "new_analysis_path": f"{lote}/{version}/{new_ts}",
+        "new_timestamp": new_ts,
+        "relatorios_dir": dest_rel,
+        "html_url": f"{lote}/{version}/{new_ts}/relatorios/index.html"
+    }, indent=2, ensure_ascii=False)
 
 
 def sanitize_batch_isolation(text: str) -> str:
@@ -2352,10 +2484,9 @@ def sanitize_batch_isolation(text: str) -> str:
     text = re.sub(r'— mesmo padrão do Lote \d+', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\(Lote \d+\)', '', text, flags=re.IGNORECASE)
     text = re.sub(r'\(Lotes \d+(?:,\s*\d+)*(?:\s*e\s*\d+)?\)', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'Lote \d+ \(([^)]+)\)', r'\1', text, flags=re.IGNORECASE)
+    text = re.sub(r'Lote \d+ \(([^)]+)\)', r'', text, flags=re.IGNORECASE)
     text = re.sub(r'Lote \d+', 'especificação técnica', text, flags=re.IGNORECASE)
     return text
-
 
 def clean_unicode_text(val):
     """Normaliza texto Unicode em NFC, sanitiza surrogates/mojibake e garante isolamento estrito de lote."""
@@ -2410,23 +2541,43 @@ def tool_build_master_index() -> str:
 
     runs = []
 
-    # Escaneia pastas de relatórios por lote e timestamp (suporta analise/<timestamp> e analise/<lote>/<timestamp>)
+    # Escaneia pastas de relatórios suportando profundidade tripla:
+    # analise/<lote>/<version>/<timestamp>/relatorios/, analise/<lote>/<timestamp>/ ou analise/<timestamp>/
     candidates = []
-    for entry in sorted(os.listdir(analise_dir), reverse=True):
-        entry_dir = os.path.join(analise_dir, entry)
-        if not os.path.isdir(entry_dir) or entry.startswith('.'):
-            continue
-        rel_direct = os.path.join(entry_dir, 'relatorios')
-        if os.path.exists(rel_direct):
-            candidates.append((entry, None, entry_dir, rel_direct))
-        else:
-            for sub_ts in sorted(os.listdir(entry_dir), reverse=True):
-                sub_dir = os.path.join(entry_dir, sub_ts)
-                rel_sub = os.path.join(sub_dir, 'relatorios')
-                if os.path.isdir(sub_dir) and os.path.exists(rel_sub):
-                    candidates.append((sub_ts, entry, sub_dir, rel_sub))
+    for dirpath, dirnames, filenames in os.walk(analise_dir):
+        if os.path.basename(dirpath) == 'relatorios' and ('dados_analise.json' in filenames or 'index.html' in filenames):
+            run_dir = os.path.dirname(dirpath)
+            rel_p = os.path.relpath(run_dir, analise_dir).replace('\\', '/')
+            parts = rel_p.split('/')
+            if len(parts) >= 3:
+                lote_p = parts[0]
+                version_p = parts[1]
+                ts_p = parts[2]
+            elif len(parts) == 2:
+                lote_p = parts[0]
+                version_p = "v1.0"
+                ts_p = parts[1]
+            else:
+                lote_p = None
+                version_p = "v1.0"
+                ts_p = parts[0]
+            candidates.append({
+                "ts": ts_p,
+                "version": version_p,
+                "lote_parent": lote_p,
+                "ts_dir": run_dir,
+                "rel_dir": dirpath,
+                "rel_path": rel_p
+            })
+    candidates.sort(key=lambda c: c["ts"], reverse=True)
 
-    for ts, lote_parent, ts_dir, rel_dir in candidates:
+    for cand in candidates:
+        ts = cand["ts"]
+        version = cand["version"]
+        lote_parent = cand["lote_parent"]
+        ts_dir = cand["ts_dir"]
+        rel_dir = cand["rel_dir"]
+        rel_path = cand["rel_path"]
         json_path = os.path.join(rel_dir, 'dados_analise.json')
         resumo_path = os.path.join(rel_dir, '00_RESUMO_EXECUTIVO.md')
 
@@ -2599,7 +2750,7 @@ def tool_build_master_index() -> str:
             resumo_snippet = resumo_snippet[:320] + "..."
 
         # Lista arquivos de entrada
-        ent_dir = os.path.join(analise_dir, ts, 'entrada')
+        ent_dir = os.path.join(analise_dir, rel_path, 'entrada')
         entrada_files = []
         if os.path.exists(ent_dir):
             for dirpath, _, filenames in os.walk(ent_dir):
@@ -2611,6 +2762,8 @@ def tool_build_master_index() -> str:
 
         runs.append({
             "timestamp": ts,
+            "version": version,
+            "is_revision": "revisao" in ts.lower() or bool(data_json.get("audit_trail")),
             "date_formatted": date_str,
             "title": title,
             "lote_name": lote_name,
@@ -2621,7 +2774,8 @@ def tool_build_master_index() -> str:
             "resumo_snippet": resumo_snippet,
             "top_achados": top_achados,
             "lote_parent": lote_parent,
-            "index_html": f"{lote_parent}/{ts}/relatorios/index.html" if lote_parent else f"{ts}/relatorios/index.html",
+            "rel_path": rel_path,
+            "index_html": f"{rel_path}/relatorios/index.html",
             "metrics": {
                 "total_achados": total_achados,
                 "confirmados": adjudication["confirmed"] if data_json else 0,
@@ -2721,7 +2875,7 @@ def tool_build_master_index() -> str:
                 <div class="run-card-header">
                     <div>
                         <div class="run-date"><i class="fa-solid fa-calendar-day"></i> {r['date_formatted']}</div>
-                        <h3 class="run-title">{r['title']}</h3>
+                        <h3 class="run-title">{r['title']} <span class="skill-badge" style="background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd; font-size:0.75rem;"><i class="fa-solid fa-code-branch"></i> {r.get('version', 'v1.0')}</span>{' <span class="skill-badge" style="background:#fef3c7; color:#92400e; border:1px solid #fde68a; font-size:0.75rem;"><i class="fa-solid fa-clock-rotate-left"></i> Revisão Adjudicada</span>' if r.get('is_revision') else ''}</h3>
                     </div>
                     <span class="badge {parecer_cls}">{r['parecer']}</span>
                 </div>
@@ -2957,10 +3111,21 @@ TOOLS_MANIFEST = [
     },
     {
         "name": "finalize_execution",
-        "description": "Move os arquivos do lote de entrada/ para analise/<timestamp>/entrada/ e atualiza analise/index.html.",
+        "description": "Move os arquivos do lote de entrada/ para analise/<lote>/<version>/<timestamp>/entrada/ e atualiza analise/index.html.",
         "inputSchema": {"type": "object", "properties": {
-            "timestamp": {"type": "string", "description": "Timestamp completo da análise (YYYYMMDD_HHMMSS_NOME_LOTE)."}
+            "timestamp": {"type": "string", "description": "Timestamp ou caminho da análise."},
+            "lote": {"type": "string", "description": "Nome do lote (opcional se dedutível do timestamp)."},
+            "version": {"type": "string", "description": "Versão do documento (ex: v1.0, v1.8)."}
         }, "required": ["timestamp"]}
+    },
+    {
+        "name": "create_review_revision",
+        "description": "Cria uma nova rodada de revisão pontual/adjudicação a partir de um relatório existente (analise/<lote>/<version>/<novo_timestamp>/), preservando o histórico e a baseline imutável da rodada anterior.",
+        "inputSchema": {"type": "object", "properties": {
+            "source_analysis": {"type": "string", "description": "Timestamp ou caminho relativo da análise de origem (ex: 03_HLD_NUTANIX/v1.8/20261014_202600 ou 20261014_202600)."},
+            "reason": {"type": "string", "description": "Justificativa/motivação da revisão pontual do auditor."},
+            "reviewer": {"type": "string", "description": "Identificação do revisor/auditor."}
+        }, "required": ["source_analysis"]}
     },
     {
         "name": "build_master_index",
@@ -3013,7 +3178,9 @@ def dispatch_tool(name: str, args: dict) -> str:
     elif name == "build_run_index_html":
         return tool_build_run_index_html(args.get("timestamp", ""))
     elif name == "finalize_execution":
-        return tool_finalize_execution(args.get("timestamp", ""))
+        return tool_finalize_execution(args.get("timestamp", ""), args.get("lote"), args.get("version"))
+    elif name == "create_review_revision":
+        return tool_create_review_revision(args.get("source_analysis", ""), args.get("reason", "Ajuste e Adjudicação de Relatório"), args.get("reviewer", "auditor"))
     elif name == "build_master_index":
         return tool_build_master_index()
     else:

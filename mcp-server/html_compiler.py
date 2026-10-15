@@ -729,15 +729,32 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
     if root_dir is None:
         root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
-    rel_dir = os.path.join(root_dir, 'analise', timestamp, 'relatorios')
+    clean_ts = (timestamp or "").strip().replace('\\', '/')
+    analise_root = os.path.join(root_dir, 'analise')
+    direct_rel = os.path.join(analise_root, clean_ts, 'relatorios')
+
+    if os.path.isdir(direct_rel):
+        rel_dir = direct_rel
+    else:
+        # Busca recursiva caso tenha sido passado apenas o timestamp da folha
+        rel_dir = direct_rel
+        target_leaf = clean_ts.split('/')[-1]
+        for dirpath, dirnames, _ in os.walk(analise_root):
+            if os.path.basename(dirpath) == target_leaf and 'relatorios' in dirnames:
+                candidate = os.path.join(dirpath, 'relatorios')
+                if os.path.exists(candidate):
+                    rel_dir = candidate
+                    break
+
     output_path = os.path.join(rel_dir, 'index.html')
     json_path = os.path.join(rel_dir, 'dados_analise.json')
 
     if not os.path.exists(rel_dir):
         return f"Diretório não encontrado: {rel_dir}"
 
-    lote_name = timestamp.split('_', 2)[2].replace('_', ' ') if len(timestamp.split('_', 2)) > 2 else timestamp
-    data_fmt = f"{timestamp[6:8]}/{timestamp[4:6]}/{timestamp[:4]}" if len(timestamp) >= 8 else timestamp
+    leaf_name = clean_ts.split('/')[-1]
+    lote_name = leaf_name.split('_', 2)[2].replace('_', ' ') if len(leaf_name.split('_', 2)) > 2 else leaf_name
+    data_fmt = f"{leaf_name[6:8]}/{leaf_name[4:6]}/{leaf_name[:4]}" if len(leaf_name) >= 8 and leaf_name[:8].isdigit() else leaf_name
 
     # 1. Tenta carregar dados_analise.json
     data_json = {}

@@ -72,14 +72,21 @@ flowchart TD
 │       ├── 00_RFP_Principal.docx
 │       ├── 01_Anexo_A_Requisitos.docx
 │       └── planilha_quantitativos.xlsx
-└── analise/                             # Histórico de análises por timestamp
-    ├── index.html                       # Central Master de Análises
-    ├── manifest.json
-    └── YYYYMMDD_HHMMSS_NOME_LOTE/
-        ├── entrada/                     # Cópia dos arquivos originais (imutável)
-        └── relatorios/
-            ├── dados_analise.json       # Base de dados estruturada SSOT
-            └── index.html               # Relatório Consolidado Exaustivo HTML
+└── analise/                             # Histórico de análises por lote, versão e timestamp
+    ├── index.html                       # Central Master de Análises (Portal Executivo)
+    ├── manifest.json                    # Catálogo estruturado de todas as análises
+    └── 01_Nome_do_Lote/                 # Lote de análise
+        └── v1.0/                        # Versão do documento auditado
+            ├── 20261014_210000/         # Rodada inicial de auditoria (IA)
+            │   ├── entrada/             # Cópia fiel da baseline analisada (imutável)
+            │   └── relatorios/
+            │       ├── dados_analise.json  # Base estruturada SSOT
+            │       └── index.html       # Relatório Consolidado Exaustivo HTML
+            └── 20261014_213000_revisao/ # Rodada pontual ajustada/adjudicada pelo revisor humano
+                ├── entrada/             # Cópia preservada
+                └── relatorios/
+                    ├── dados_analise.json  # Base ajustada com audit_trail
+                    └── index.html       # Relatório revisado com histórico preservado
 ```
 
 ---
