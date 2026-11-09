@@ -9,10 +9,43 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import unicodedata
 from collections import defaultdict
 
 
 SCHEMA_VERSION = "2.3"
+
+
+def sanitize_batch_isolation(val):
+    """Remove ou neutraliza citações cruzadas a outros lotes para garantir isolamento estrito por lote."""
+    if isinstance(val, str):
+        if not val:
+            return val
+        val = val.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace")
+        val = unicodedata.normalize("NFC", val)
+        val = re.sub(r"Idêntico ao achado [A-Z]{2,5}-\d{3} do Lote \d+:?\s*", "", val, flags=re.IGNORECASE)
+        val = re.sub(r"— mesmo padrão do Lote \d+", "", val, flags=re.IGNORECASE)
+        val = re.sub(r"\(Lote \d+\)", "", val, flags=re.IGNORECASE)
+        val = re.sub(r"\(Lotes \d+(?:,\s*\d+)*(?:\s*e\s*\d+)?\)", "", val, flags=re.IGNORECASE)
+        val = re.sub(r"Lote \d+ \(([^)]+)\)", r"\1", val, flags=re.IGNORECASE)
+        val = re.sub(r"Lote \d+", "especificação técnica", val, flags=re.IGNORECASE)
+        val = val.replace(" \ufffd ", " — ")
+        val = val.replace("\ufffd", "")
+        return val
+    elif isinstance(val, list):
+        return [sanitize_batch_isolation(item) for item in val]
+    elif isinstance(val, dict):
+        return {k: sanitize_batch_isolation(v) for k, v in val.items()}
+    return val
+
+
+def clean_unicode_text(val):
+    """Normaliza texto Unicode em NFC, sanitiza surrogates e garante isolamento estrito de lote."""
+    if not isinstance(val, str):
+        return val
+    if not val:
+        return ""
+    return sanitize_batch_isolation(val)
 
 
 # Termos que comprovam o contexto de uma lacuna por ausência. A citação deve
@@ -114,29 +147,139 @@ def build_extraction_coverage(documents: list[dict]) -> dict:
             "nao_verificaveis": sum(r["status"] != "extraido" for r in rows), "arquivos": rows}
 
 
+RULE_PREFIX_CHECKLIST_MAP = {
+    "edit-004": ["rfc.md", "editorial.md"],
+    "edit-005": ["iso.md", "editorial.md"],
+    "edit-006": ["iso.md", "editorial.md"],
+    "edit-007": ["estrutura_e_referencias.md", "editorial.md"],
+    "edit-008": ["estrutura_e_referencias.md", "editorial.md"],
+    "edit-009": ["iso.md", "rfc.md", "editorial.md"],
+    "edit": ["editorial.md", "estrutura_e_referencias.md"],
+    "estr": ["estrutura_e_referencias.md", "editorial.md"],
+    "rfp-norma": ["rfp.md", "iso.md", "ieee.md"],
+    "rfp": ["rfp.md", "contratos.md"],
+    "xref-prazo": ["rfp.md", "contratos.md"],
+    "xref-sla": ["contratos.md", "rfp.md"],
+    "ctr": ["contratos.md"],
+    "hld": ["hld.md", "arquitetura.md"],
+    "lld": ["lld.md", "arquitetura.md"],
+    "car": ["carrier.md", "arquitetura.md"],
+    "carrier": ["carrier.md", "arquitetura.md"],
+    "lgpd": ["lgpd.md", "seguranca.md"],
+    "cld": ["cloud.md", "arquitetura.md", "seguranca.md"],
+    "dc": ["datacenter.md", "arquitetura.md"],
+    "int": ["integracoes.md", "arquitetura.md", "tm_forum.md"],
+    "xls": ["planilha.md", "tabelas.md"],
+    "xref-qtd": ["planilha.md", "tabelas.md"],
+    "dia": ["diagramas.md", "imagens.md"],
+    "vis": ["diagramas.md", "imagens.md"],
+    "visual": ["diagramas.md", "imagens.md"],
+}
+
+SKILL_CHECKLIST_MAP = {
+    "analisar-documento": ["editorial.md", "estrutura_e_referencias.md"],
+    "analisar-rfp": ["rfp.md", "contratos.md"],
+    "analisar-hld": ["hld.md", "arquitetura.md"],
+    "analisar-lld": ["lld.md", "arquitetura.md"],
+    "analisar-contrato": ["contratos.md"],
+    "analisar-carrier": ["carrier.md", "arquitetura.md"],
+    "analisar-cloud": ["cloud.md", "arquitetura.md"],
+    "analisar-datacenter": ["datacenter.md", "arquitetura.md"],
+    "analisar-integracoes": ["integracoes.md", "tm_forum.md"],
+    "analisar-lgpd": ["lgpd.md", "seguranca.md"],
+    "analisar-planilha": ["planilha.md", "tabelas.md"],
+    "analisar-diagramas": ["diagramas.md", "imagens.md"],
+}
+
+AUTOMATED_CHECKLISTS = {
+    "editorial.md", "estrutura_e_referencias.md", "rfp.md", "contratos.md",
+    "hld.md", "lld.md", "arquitetura.md", "carrier.md", "lgpd.md",
+    "seguranca.md", "cloud.md", "datacenter.md", "integracoes.md",
+    "planilha.md", "tabelas.md", "diagramas.md", "imagens.md",
+    "iso.md", "rfc.md", "ieee.md",
+}
+
+
 def build_checklist_status(active_checklists: list[str], findings: list[dict], coverage: dict) -> dict:
-    """Evita o falso 'conforme': cada checklist declara seu estado e seus achados."""
+    """Vincula achados aos 26 checklists de domínio e declara o estado real de verificação."""
     by_checklist = defaultdict(list)
+    seen_per_checklist = defaultdict(set)
+
+    def _add(chk: str, f: dict):
+        fid = f.get("id", id(f))
+        if fid not in seen_per_checklist[chk]:
+            seen_per_checklist[chk].add(fid)
+            by_checklist[chk].append(f)
+
     for finding in findings:
-        rule = str(finding.get("rule_id", "")).lower()
-        if rule.startswith("edit"):
-            by_checklist["editorial.md"].append(finding)
-            by_checklist["estrutura_e_referencias.md"].append(finding)
+        rule = str(finding.get("rule_id") or finding.get("id") or "").lower()
+        matched_rule = False
+        for prefix, chks in RULE_PREFIX_CHECKLIST_MAP.items():
+            if rule.startswith(prefix):
+                for chk in chks:
+                    _add(chk, finding)
+                matched_rule = True
+        sem_skill = str(finding.get("semantic_skill", "")).lower()
+        if sem_skill in SKILL_CHECKLIST_MAP:
+            for chk in SKILL_CHECKLIST_MAP[sem_skill]:
+                _add(chk, finding)
+            matched_rule = True
+        if not matched_rule:
+            cat = str(finding.get("cat") or finding.get("categoria") or "").lower()
+            if "carrier" in cat or "dcn" in cat:
+                _add("carrier.md", finding)
+            elif "cloud" in cat or "nuvem" in cat:
+                _add("cloud.md", finding)
+            elif "datacenter" in cat:
+                _add("datacenter.md", finding)
+            elif "integra" in cat or "api" in cat:
+                _add("integracoes.md", finding)
+            elif "lgpd" in cat or "privacidade" in cat:
+                _add("lgpd.md", finding)
+            elif "contrato" in cat or "sla" in cat:
+                _add("contratos.md", finding)
+            elif "rfp" in cat or "edital" in cat:
+                _add("rfp.md", finding)
+            elif "hld" in cat:
+                _add("hld.md", finding)
+            elif "lld" in cat:
+                _add("lld.md", finding)
+            elif "planilha" in cat or "quantitativo" in cat:
+                _add("planilha.md", finding)
+            elif "diagrama" in cat or "imagem" in cat:
+                _add("diagramas.md", finding)
+            elif "estrutur" in cat or "redacional" in cat or "rfc" in cat:
+                _add("editorial.md", finding)
+                _add("estrutura_e_referencias.md", finding)
+
     result = {}
     for checklist in active_checklists:
         linked = by_checklist.get(checklist, [])
-        if coverage["nao_verificaveis"]:
+        if coverage.get("nao_verificaveis"):
             state = "Parcialmente verificável"
             obs = "Há arquivos sem texto extraível; não declarar conformidade integral."
         elif linked:
             state = "Não conforme"
-            obs = f"{len(linked)} achado(s) vinculado(s) a controles automatizados."
+            obs = f"{len(linked)} achado(s) vinculado(s) a controles deste checklist."
+        elif checklist in AUTOMATED_CHECKLISTS and coverage.get("extraidos", 0) > 0:
+            state = "Conforme (Controles Determinísticos)"
+            obs = "Controles determinísticos executados sem apontamentos; sujeito à revisão semântica."
         else:
             state = "Não verificado"
-            obs = "Checklist selecionado, porém ainda sem controle automatizado correspondente."
-        result[checklist] = {"conformidade": state, "observacao": obs,
-                             "itens": [{"verificacao": f.get("title", ""), "status": "Não conforme",
-                                         "achado": f["id"], "evidencia": f.get("citacao", "")} for f in linked]}
+            obs = "Checklist selecionado para verificação durante a revisão semântica especializada."
+        result[checklist] = {
+            "conformidade": state,
+            "observacao": obs,
+            "itens": [
+                {
+                    "verificacao": f.get("title", f.get("titulo", "")),
+                    "status": "Não conforme",
+                    "achado": f.get("id", "—"),
+                    "evidencia": f.get("citacao", f.get("evidencia_literal", "")),
+                }
+                for f in linked
+            ],
+        }
     return result
 
 

@@ -11,7 +11,7 @@ Esta skill é o ponto de entrada principal da RTI. Ela orquestra a análise comp
 
 ## Workflow de Execução
 
-### Passo 0: Triagem Adaptativa, Isolamento por Lote e Pausa Obrigatória
+### Passo 0: Triagem Adaptativa e Isolamento por Lote
 
 > [!IMPORTANT]
 > **Regra de Isolamento por Lote:** Cada pasta em `entrada/<lote>` DEVE ser analisada em um contexto isolado e dedicado. **NUNCA** analise múltiplos lotes em um único ciclo massificado, para evitar a fadiga de contexto que condensa os achados dos lotes secundários.
@@ -30,15 +30,15 @@ Esta skill é o ponto de entrada principal da RTI. Ela orquestra a análise comp
    - Se contiver .xlsx ou .csv → `analisar-planilha`
    - Se contiver .png, .jpg, .svg, .drawio OU diagramas embutidos em .docx/.pdf → `analisar-diagramas`
    - Se mencionar dados pessoais, LGPD, ANPD, privacidade → `analisar-lgpd`
+   - Se contiver escopo Carrier/DWDM/MPLS/BGP/DCN → `analisar-carrier`
+   - Se contiver escopo Cloud/Kubernetes/AWS/Azure/GCP/OpenStack → `analisar-cloud`
+   - Se contiver escopo Datacenter/Tier/UPS/Climatização → `analisar-datacenter`
+   - Se contiver escopo APIs/ESB/Kafka/TM Forum → `analisar-integracoes`
 
 > [!CAUTION]
-> **Obrigatoriedade de Skills:** Todas as skills recomendadas pelo `profile_baseline` e gravadas no `decisoes.yaml` DEVEM ser ativadas no `dados_analise.json`. O validador MCP `tool_validate_analise_contract` acusará erro ou aviso se alguma skill recomendada for omitida.
+> **Obrigatoriedade de Skills:** Todas as skills recomendadas pelo `profile_baseline` e gravadas no `decisoes.yaml` DEVEM ser ativadas no `dados_analise.json`. O validador MCP `validate_analise_contract` acusará erro ou aviso se alguma skill recomendada for omitida.
 
-3. 🛑 **PAUSA OBRIGATÓRIA:** Apresente ao usuário:
-   - Lista de arquivos detectados (nome, extensão, tamanho)
-   - Skills selecionadas com justificativa para cada uma
-   - Checklists ativos e inaplicáveis (N/A com motivo)
-   - Aguarde confirmação explícita antes de continuar.
+3. **Execução Autônoma por Padrão:** O motor autoriza automaticamente 100% das skills recomendadas em `decisoes.yaml` e prossegue sem pausas (a menos que o usuário solicite expressamente validação prévia do plano de triagem).
 
 4. **Idioma:** Todos os relatórios em **PT-BR exclusivamente**.
 
@@ -47,17 +47,16 @@ Esta skill é o ponto de entrada principal da RTI. Ela orquestra a análise comp
 ### Passo 1: Inicialização
 
 1. Obtenha o timestamp atual: `YYYYMMDD_HHMMSS`.
-2. Monte o timestamp completo: `YYYYMMDD_HHMMSS_<NOME_DO_LOTE>` (ex: `20260804_120000_lote-exemplo-rfp`).
-3. Crie a estrutura:
-   - `analise/<timestamp>/relatorios/`
-   - `analise/<timestamp>/entrada/`
+2. Monte a estrutura canônica (`analise/<lote>/<version>/<timestamp>/` ou `analise/YYYYMMDD_HHMMSS_<NOME_DO_LOTE>/`):
+   - `relatorios/`
+   - `entrada/`
 
 ---
 
 ### Passo 2: Congelamento de Baseline
 
 1. Execute `freeze_baseline` para calcular SHA-256 de todos os arquivos do lote.
-2. Registre o inventário no `03_RASTREABILIDADE_E_LOG.md`.
+2. Registre o inventário imutável em `baseline_files` dentro do `dados_analise.json` (renderizado na Seção 8 do `index.html`).
 
 ---
 
@@ -73,7 +72,7 @@ Esta skill é o ponto de entrada principal da RTI. Ela orquestra a análise comp
 
 ---
 
-### Passo 3.1: Matriz de Validação Estrutural e Redacional (6 Pilares Mandatórios)
+### Passo 3.1: Matriz de Validação Estrutural e Redacional (7 Pilares Mandatórios)
 
 Execute obrigatoriamente a verificação não-técnica sobre 100% dos documentos, englobando:
 

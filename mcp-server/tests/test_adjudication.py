@@ -162,6 +162,110 @@ class FindingAdjudicationTests(unittest.TestCase):
             unchanged = json.loads((report_dir / "dados_analise.json").read_text(encoding="utf-8"))
             self.assertNotIn("adjudication", unchanged["findings"][1])
 
+    def test_reconcile_versions_distinguishes_sanados_reincidentes_and_novos(self):
+        import audit_engine
+        json_antigo = {
+            "timestamp": "20261010_100000_LOTE_V1",
+            "parecer_badge": "NÃO APTO",
+            "kpis": {"iqd": "70.0%"},
+            "findings": [
+                {
+                    "id": "CAR-001",
+                    "title": "Ausência de margem OSNR na camada DWDM",
+                    "categoria": "Carrier Telecom & DCN",
+                    "criticidade": "Alta",
+                    "prioridade": "P1",
+                    "loc": "Seção 3.1",
+                },
+                {
+                    "id": "CAR-002",
+                    "title": "Falta de proteção LFA/TI-LFA no backbone MPLS",
+                    "categoria": "Carrier Telecom & DCN",
+                    "criticidade": "Crítica",
+                    "prioridade": "P0",
+                    "loc": "Seção 4.2",
+                },
+            ],
+        }
+        json_novo = {
+            "timestamp": "20261011_100000_LOTE_V2",
+            "parecer_badge": "APTO COM RESSALVAS",
+            "kpis": {"iqd": "88.0%"},
+            "findings": [
+                {
+                    "id": "CAR-010",
+                    "title": "Ausência de margem OSNR na camada DWDM",
+                    "categoria": "Carrier Telecom & DCN",
+                    "criticidade": "Alta",
+                    "prioridade": "P1",
+                    "loc": "Seção 3.2",
+                },
+                {
+                    "id": "CAR-020",
+                    "title": "Timer BFD acima de 50ms em enlaces críticos",
+                    "categoria": "Carrier Telecom & DCN",
+                    "criticidade": "Média",
+                    "prioridade": "P2",
+                    "loc": "Seção 5.1",
+                },
+            ],
+        }
+        diff = audit_engine.reconcile_versions(json_antigo, json_novo)
+        self.assertEqual(diff["achados_sanados_count"], 1)
+        self.assertEqual(diff["achados_reincidentes_count"], 1)
+        self.assertEqual(diff["novos_achados_count"], 1)
+        self.assertEqual(diff["sanados"][0]["id_anterior"], "CAR-002")
+        self.assertEqual(diff["reincidentes"][0]["id_anterior"], "CAR-001")
+        self.assertEqual(diff["novos"][0]["id_atual"], "CAR-020")
+        self.assertEqual(diff["delta_iqd"], "+18.0%")
+
+    def test_triple_hierarchy_path_and_create_review_revision(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            report_dir, _ = self._fixture(root)
+            timestamp = "20261010_120000_LOTE_TESTE"
+            with patch.object(server, "get_workspace_root", return_value=str(root)):
+                rev_res = json.loads(server.tool_create_review_revision(
+                    timestamp, reason="Adjudicação de revisão técnica", reviewer="auditor_senior"
+                ))
+                self.assertEqual(rev_res["status"], "success")
+                rev_path = rev_res["new_analysis_path"]
+                self.assertEqual(len(rev_path.split("/")), 3)
+
+                manifest = json.loads(server.tool_get_semantic_review_manifest(rev_path))
+                self.assertEqual(manifest["status"], "success")
+
+                adj_res = json.loads(server.tool_adjudicate_findings(rev_path, [
+                    {
+                        "finding_id": "FIND-1",
+                        "status": "confirmado",
+                        "rationale": "Trecho confirmado literalmente na linha 2 do arquivo da baseline.",
+                    },
+                    {
+                        "finding_id": "FIND-2",
+                        "status": "falso_positivo",
+                        "rationale": "Exigência não aplicável ao escopo do lote analisado.",
+                    },
+                ]))
+                self.assertEqual(adj_res["pending_adjudication"], 0)
+                rev_html = (root / "analise" / rev_path / "relatorios" / "index.html").read_text(encoding="utf-8")
+                self.assertIn('href="../../../../index.html"', rev_html)
+
+    def test_all_26_checklists_and_structural_7_pillars(self):
+        self.assertEqual(len(server.ALL_CHECKLISTS), 26)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            doc_path = pathlib.Path(temp_dir) / "especificacao.md"
+            doc_path.write_text(
+                "1.1 Introdução\nTexto inicial.\n1.3 Arquitetura\n"
+                "Conforme Tabela 9, a taxa é de 10 Gbps ou 10 GB/s.\n",
+                encoding="utf-8",
+            )
+            findings = server.analyze_document_structure(str(doc_path))
+            ids = {f["id"] for f in findings}
+            self.assertIn("EDIT-007", ids)
+            self.assertIn("EDIT-008", ids)
+            self.assertIn("EDIT-009", ids)
+
 
 if __name__ == "__main__":
     unittest.main()

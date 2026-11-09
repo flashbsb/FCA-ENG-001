@@ -132,15 +132,8 @@ def analyze_spreadsheets(documents: list[dict]) -> list[dict]:
 
 
 def analyze_diagrams(documents: list[dict]) -> list[dict]:
-    findings = []
-    images = [d for d in documents if d.get("ext") in (".png", ".jpg", ".jpeg", ".svg", ".drawio", ".bmp")]
-    for doc in images:
-        if not re.match(r"fig\d{2}_", os.path.basename(doc["name"]), re.I):
-            findings.append(_finding("DIA-NOME", "Diagrama fora do padrão de nomenclatura rastreável", doc, None,
-                category="Diagrama/Imagem", finding_type="Errata/Estrutura",
-                fact="O nome do arquivo não segue o padrão figNN_documento_secao_descricao.",
-                impact="A vinculação do diagrama à seção e à baseline fica menos rastreável.", crit="Baixa", prio="P3"))
-    return findings
+    """Conforme analisar-diagramas/SKILL.md, a ausência do prefixo figNN_ por si só não constitui achado."""
+    return []
 
 
 def run_specialized_controls(documents: list[dict], skills: list[str]) -> list[dict]:

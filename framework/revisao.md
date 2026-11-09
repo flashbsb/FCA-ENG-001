@@ -38,6 +38,7 @@ O revisor técnico mantém rastreabilidade e independência. O proprietário for
 1. Registrar demanda, propósito, escopo, exclusões e classificação da informação.
 2. Inicializar o `TIMESTAMP` no formato `YYYYMMDD_HHMMSS` e criar a estrutura em `analise/<timestamp>/`.
 3. **Triagem Adaptativa e Pausa Interativa de Escopo (Passo 0):** Executar a ferramenta `profile_baseline` sobre `entrada/`, mapeando os domínios técnicos presentes, definindo a matriz de checklists ativos e inaplicáveis (com justificativa auditável), recomendando/omitindo skills e sugerindo novas skills especializadas (ex: `analisar-lgpd`, `analisar-finops`). **A IA DEVE APRESENTAR O PLANO DE TRIAGEM AO USUÁRIO E PAUSAR A EXECUÇÃO AGUARDANDO A CONFIRMAÇÃO DO USUÁRIO ANTES DE CONTINUAR.**
+3. **Triagem Adaptativa de Escopo (Passo 0):** Executar a ferramenta `profile_baseline` sobre `entrada/<lote>/`, mapeando os domínios técnicos presentes, definindo a matriz de checklists ativos e inaplicáveis (com justificativa auditável), ativando 100% das skills recomendadas em `decisoes.yaml` e auto-gerando rascunhos para novas skills especializadas detectadas. Por padrão, o pipeline prossegue de forma autônoma sem pausas; quando o usuário solicitar validação prévia do plano de triagem, aguardar confirmação antes de prosseguir.
 4. Congelar baseline: inventário, versão, data, origem, hash (SHA-256 de textos e imagens em `entrada/`) e relação entre documentos. Imagens avulsas ou extraídas devem seguir a nomenclatura padronizada `fig{NN}_{doc}_{secao/pag}_{descricao_curta}.png` e ser inventariadas.
 5. Criar mapa documental e matriz de rastreabilidade de objetivos, requisitos e evidências.
 6. Executar triagem editorial, estrutural, técnica e normativa conforme os checklists mantidos ativos.
@@ -189,6 +190,7 @@ Planejar antes de revisar; realizar leitura cruzada; usar identificadores estáv
 Registrar apenas após encerramento, sem reescrever o histórico. Cada lição referencia evidência, contexto, decisão, benefício esperado, responsável e revisão futura.
 
 ## 35. Aviso de Responsabilidade e Colaboração
+## 34. Aviso de Responsabilidade e Colaboração
 
 Este conteúdo foi elaborado para apoiar a análise e a tomada de decisão, mas não representa uma verdade absoluta. Diferentes contextos, interpretações, restrições e necessidades podem levar a conclusões distintas, todas potencialmente válidas.
 
@@ -197,5 +199,6 @@ A leitura deste material pressupõe análise crítica, entendimento e concordân
 A qualidade deste conteúdo é uma responsabilidade compartilhada. Identificar inconsistências, sugerir melhorias, corrigir informações ou complementar análises faz parte de um processo colaborativo e contínuo. A responsabilidade pelos resultados não deve ser atribuída a uma única pessoa, mas a todos que participam da sua leitura, revisão e evolução.
 
 ## Autoauditoria do framework
+## 35. Autoauditoria do framework
 
 Esta versão separa criticidade de prioridade e de tipo; separa análise de consultoria; proíbe oficialidade e invenção; condiciona métricas a denominadores; e exige evidência e baseline. A validação de aplicabilidade normativa, pesos de índices e critérios específicos permanece deliberadamente dependente do contexto, para não criar obrigações fictícias.

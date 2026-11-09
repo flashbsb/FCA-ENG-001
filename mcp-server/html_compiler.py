@@ -25,6 +25,7 @@ import base64
 import mimetypes
 import unicodedata
 import html
+from audit_pipeline import sanitize_batch_isolation, clean_unicode_text
 
 ADJUDICATION_LABELS = {
     "pendente": "Pendente de adjudicação",
@@ -53,54 +54,6 @@ def _adjudication_counts(findings: list[dict]) -> dict:
     return counts
 
 
-def sanitize_batch_isolation(text: str) -> str:
-    """Remove ou neutraliza citações cruzadas a outros lotes para garantir isolamento estrito por lote."""
-    if not isinstance(text, str) or not text:
-        return text
-    text = re.sub(r'Idêntico ao achado [A-Z]{2,5}-\d{3} do Lote \d+:?\s*', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'— mesmo padrão do Lote \d+', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'\(Lote \d+\)', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'\(Lotes \d+(?:,\s*\d+)*(?:\s*e\s*\d+)?\)', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'Lote \d+ \(([^)]+)\)', r'\1', text, flags=re.IGNORECASE)
-    text = re.sub(r'Lote \d+', 'especificação técnica', text, flags=re.IGNORECASE)
-    return text
-
-
-def clean_unicode_text(val):
-    """Normaliza texto Unicode em NFC, sanitiza surrogates/mojibake e garante isolamento estrito de lote."""
-    if not isinstance(val, str):
-        return val
-    if not val:
-        return ""
-    val = val.encode('utf-8', errors='surrogateescape').decode('utf-8', errors='replace')
-    val = unicodedata.normalize('NFC', val)
-    val = val.replace('A\ufffdRequisitos', 'A — Requisitos')
-    val = val.replace('A?Requisitos', 'A — Requisitos')
-    val = val.replace('3\ufffdEm', '3ª Emissão')
-    val = val.replace('3?Em', '3ª Emissão')
-    val = val.replace('3Em', '3ª Emissão')
-    val = val.replace('MODERNIZA\ufffdO', 'MODERNIZAÇÃO')
-    val = val.replace('MODERNIZA??O', 'MODERNIZAÇÃO')
-    val = val.replace('MODERNIZAO', 'MODERNIZAÇÃO')
-    val = val.replace('T\ufffdcnica', 'Técnica')
-    val = val.replace('T?cnica', 'Técnica')
-    val = val.replace('Tcnica', 'Técnica')
-    val = val.replace('Especifica\ufffd\ufffdo', 'Especificação')
-    val = val.replace('Especifica??o', 'Especificação')
-    val = val.replace('Especificao', 'Especificação')
-    val = val.replace('Moderniza\ufffd\ufffdo', 'Modernização')
-    val = val.replace('Moderniza??o', 'Modernização')
-    val = val.replace('Modernizao', 'Modernização')
-    val = val.replace('An\ufffdlise', 'Análise')
-    val = val.replace('An?lise', 'Análise')
-    val = val.replace('Anlise', 'Análise')
-    val = val.replace('Comentario \ufffd', 'Comentário —')
-    val = val.replace('Comentario ?', 'Comentário —')
-    val = val.replace(' \ufffd ', ' — ')
-    val = val.replace('\ufffd', '')
-    return sanitize_batch_isolation(val)
-
-
 def _read_md(rel_dir: str, filename: str) -> str:
     p = os.path.join(rel_dir, filename)
     if os.path.exists(p):
@@ -115,22 +68,22 @@ def _extract_value(text: str, pattern: str, fallback: str = "—") -> str:
 
 
 def _inline_md(text: str, linkify_ids: bool = False) -> str:
+    """Converte Markdown inline para tags HTML, linkando IDs de achado quando ativado."""
     if not text:
         return ""
     text = clean_unicode_text(text)
-    # **negrito**
-    text = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', text)
-    # *itálico*
-    text = re.sub(r'\*(.*?)\*', r'<em>\1</em>', text)
-    # `código`
-    text = re.sub(r'`(.*?)`', r'<code>\1</code>', text)
+    text = re.sub(r'\*\*\*(.+?)\*\*\*', r'<strong><em>\1</em></strong>', text)
+    text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+    text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
+    text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
+    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2" target="_blank" rel="noopener">\1</a>', text)
 
-    # Autolink IDs de achados (ex: RFP-001 -> link âncora)
     if linkify_ids:
-        def replace_id(match):
-            found_id = match.group(0)
-            return f'<a href="#card-{found_id}" class="id-link">{found_id}</a>'
-        text = re.sub(r'\b[A-Z]{2,5}-\d{3}\b', replace_id, text)
+        text = re.sub(
+            r'\b([A-Z]{2,7}-[A-Z0-9]{3,10})\b',
+            r'<a href="#card-\1" class="ssot-link"><i class="fa-solid fa-arrow-right-to-bracket"></i> \1</a>',
+            text,
+        )
 
     return text
 
@@ -199,21 +152,6 @@ def _md_to_html_simple(md: str, linkify_ids: bool = False) -> str:
         html_lines.append('</tbody></table></div>')
 
     return '\n'.join(html_lines)
-
-
-def _inline_md(text: str, linkify_ids: bool = False) -> str:
-    """Converte Markdown inline para tags HTML, linkando IDs de achado quando ativado."""
-    text = re.sub(r'\*\*\*(.+?)\*\*\*', r'<strong><em>\1</em></strong>', text)
-    text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
-    text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
-    text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
-    text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2" target="_blank">\1</a>', text)
-
-    if linkify_ids:
-        # Transforma menções como ESTR-001, HLD-001, LGPD-001 em links para os cards
-        text = re.sub(r'\b([A-Z]{2,6}-\d{3})\b', r'<a href="#card-\1" class="ssot-link"><i class="fa-solid fa-arrow-right-to-bracket"></i> \1</a>', text)
-
-    return text
 
 
 def _parse_findings(pontos_md: str) -> list:
@@ -361,6 +299,38 @@ def _build_resumo_html(data_json: dict) -> str:
 
     skills_badges = "".join([f'<span class="badge-skill" style="display:inline-block; margin:4px; padding:6px 12px; background:var(--primary-light); color:var(--primary); border-radius:6px; font-weight:600;"><i class="fa-solid fa-microchip"></i> {s}</span>' for s in skills_ativas])
 
+    reconciliation_html = ""
+    vr = data_json.get("version_reconciliation")
+    if isinstance(vr, dict) and vr:
+        v_ant = html.escape(str(vr.get("versao_anterior", "anterior")))
+        v_atu = html.escape(str(vr.get("versao_atual", "atual")))
+        n_san = int(vr.get("achados_sanados_count", 0))
+        n_rei = int(vr.get("achados_reincidentes_count", 0))
+        n_nov = int(vr.get("novos_achados_count", 0))
+        taxa_res = html.escape(str(vr.get("taxa_resolucao_pct", 0)))
+        delta_iqd = html.escape(str(vr.get("delta_iqd", "—")))
+        reconciliation_html = f"""
+        <h4 style="margin-top:25px;">Quadro de Reconciliação Técnica e Evolução (Diff de Achados)</h4>
+        <div class="ssot-intro-note">
+            Comparação evolutiva entre a baseline anterior (<code>{v_ant}</code>) e a versão atual (<code>{v_atu}</code>).
+        </div>
+        <table class="rpt-table">
+            <thead>
+                <tr>
+                    <th>Métrica de Evolução</th>
+                    <th>Resultado</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td>Achados Sanados (Resolvidos)</td><td><strong style="color:var(--success);">{n_san}</strong></td></tr>
+                <tr><td>Achados Reincidentes (Persistentes)</td><td><strong style="color:var(--warning);">{n_rei}</strong></td></tr>
+                <tr><td>Novos Achados (Regressões / Adições)</td><td><strong style="color:var(--danger);">{n_nov}</strong></td></tr>
+                <tr><td>Taxa de Resolução</td><td><strong>{taxa_res}%</strong></td></tr>
+                <tr><td>Variação do IQD (Delta)</td><td><strong>{delta_iqd}</strong></td></tr>
+            </tbody>
+        </table>
+        """
+
     return f"""
     <div class="resumo-executivo-container">
         {adjudication_note}
@@ -393,6 +363,7 @@ def _build_resumo_html(data_json: dict) -> str:
                 {semantic_html}
             </tbody>
         </table>
+        {reconciliation_html}
         
         <h4 style="margin-top:25px;">Baseline de Documentos de Entrada</h4>
         <table class="rpt-table">
@@ -424,7 +395,10 @@ def _build_acoes_html(data_json: dict) -> str:
     findings = data_json.get("findings", [])
     confirmed_ids = {str(item.get("id", "")) for item in _confirmed_findings(findings)}
     redacoes = [item for item in data_json.get("redacoes", []) if str(item.get("achado_id", item.get("achado", ""))) in confirmed_ids]
-    esclarecimentos = [item for item in data_json.get("esclarecimentos", []) if str(item.get("finding_id", "")) in confirmed_ids]
+    esclarecimentos = [
+        item for item in data_json.get("esclarecimentos", [])
+        if not item.get("finding_id") or str(item.get("finding_id", "")) in confirmed_ids
+    ]
 
     act_rows = ""
     if redacoes:
@@ -447,12 +421,14 @@ def _build_acoes_html(data_json: dict) -> str:
 
     q_rows = ""
     for idx, esc in enumerate(esclarecimentos, 1):
-        qid = esc.get("id", f"Q-{idx:03d}")
-        doc = esc.get("doc", esc.get("documento", "—"))
-        perg = esc.get("pergunta", "—")
-        imp = esc.get("impacto", esc.get("contexto", "—"))
-        dest = esc.get("destinatario", "Comissão Técnica")
-        q_rows += f"<tr><td><strong>{qid}</strong></td><td><code>{doc}</code></td><td>{perg}</td><td>{imp}</td><td>{dest}</td></tr>"
+        qid = esc.get("id") or esc.get("id_pergunta") or f"Q-{idx:03d}"
+        doc = esc.get("doc") or esc.get("doc_ref") or esc.get("documento") or "—"
+        secao = esc.get("secao_ref") or ""
+        doc_display = f"{doc} ({secao})" if secao and secao != doc and secao not in doc else doc
+        perg = esc.get("pergunta") or "—"
+        imp = esc.get("impacto") or esc.get("justificativa") or esc.get("contexto") or "—"
+        dest = esc.get("destinatario") or "Comissão Técnica"
+        q_rows += f"<tr><td><strong>{qid}</strong></td><td><code>{doc_display}</code></td><td>{perg}</td><td>{imp}</td><td>{dest}</td></tr>"
 
     if not q_rows:
         q_rows = '<tr><td colspan="5">Nenhuma pergunta formal registrada nesta auditoria.</td></tr>'
@@ -849,10 +825,21 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
         parecer_icon = "fa-circle-check"
 
     unique_docs = sorted(list(set(f["doc_origem"] for f in findings if f.get("doc_origem"))))
-    doc_options_html = "".join([f'<option value="{d}">{d}</option>' for d in unique_docs])
+    doc_options_html = "".join([
+        f'<option value="{html.escape(str(d), quote=True)}">{html.escape(str(d))}</option>'
+        for d in unique_docs
+    ])
 
     unique_cats = sorted(list(set(f["categoria"] for f in findings if f.get("categoria"))))
-    cat_options_html = "".join([f'<option value="{c}">{c}</option>' for c in unique_cats])
+    cat_options_html = "".join([
+        f'<option value="{html.escape(str(c), quote=True)}">{html.escape(str(c))}</option>'
+        for c in unique_cats
+    ])
+
+    try:
+        master_href = os.path.relpath(os.path.join(analise_root, 'index.html'), rel_dir).replace('\\', '/')
+    except Exception:
+        master_href = "../../index.html"
 
     # Seção 2: Geração da Tabela Consolidada SSOT (Com Links Âncora por ID)
     ssot_table_rows = ""
@@ -1091,17 +1078,28 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
                 + "</div>"
             )
 
+        safe_fid = html.escape(str(fid), quote=True)
+        safe_doc = html.escape(str(f.get('doc_origem', '')), quote=True)
+        safe_crit = html.escape(str(crit), quote=True)
+        safe_prio = html.escape(str(prio), quote=True)
+        safe_tipo = html.escape(str(tipo), quote=True)
+        safe_cat = html.escape(str(cat), quote=True)
+        safe_search = html.escape(
+            f"{fid} {f.get('title', '')} {f.get('doc_origem', '')} {f.get('loc', '')} {f.get('fato', '')} {cat}",
+            quote=True,
+        )
+
         findings_cards_html += f"""
         <div class="finding-card {c_class}"
-             id="card-{fid}"
-             data-id="{fid}"
-             data-doc="{f.get('doc_origem', '')}"
-             data-crit="{crit}"
-             data-prio="{prio}"
-             data-tipo="{tipo}"
-             data-cat="{cat}"
+             id="card-{safe_fid}"
+             data-id="{safe_fid}"
+             data-doc="{safe_doc}"
+             data-crit="{safe_crit}"
+             data-prio="{safe_prio}"
+             data-tipo="{safe_tipo}"
+             data-cat="{safe_cat}"
              data-adjudication="{adjudication_status}"
-             data-search="{fid} {f['title']} {f.get('doc_origem','')} {f.get('loc','')} {f.get('fato','')} {cat}">
+             data-search="{safe_search}">
           <div class="card-top">
             <div class="top-tags">
               <span class="badge-id">{fid}</span>
@@ -1592,7 +1590,7 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
             <span>FCA-ENG-001 · Central de Revisão Técnica Independente</span>
         </div>
         <div class="actions-group">
-            <a href="../../index.html" class="btn-action btn-master-home"><i class="fa-solid fa-house"></i> Central Master</a>
+            <a href="{master_href}" class="btn-action btn-master-home"><i class="fa-solid fa-house"></i> Central Master</a>
             <button class="btn-action btn-toggle-menu" onclick="toggleSidebar()"><i class="fa-solid fa-bars"></i> Menu</button>
             <button class="btn-action btn-print" onclick="window.print()"><i class="fa-solid fa-print"></i> Imprimir / PDF</button>
         </div>

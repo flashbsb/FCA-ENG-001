@@ -24,15 +24,15 @@ O **FCA-ENG-001** é um framework padronizado para condução de **Revisão Téc
 ```mermaid
 flowchart TD
     A[Documentos em entrada/<lote>/] --> T0[Passo 0: Triagem Adaptativa\nprofile_baseline + Seleção de Skills]
-    T0 --> PAUSE[🛑 PAUSA — Confirmação do Usuário]
-    PAUSE --> B[Passo 1: Timestamp + Estrutura\nanalise/YYYYMMDD_HHMMSS_LOTE/]
+    T0 --> B[Passo 1: Timestamp + Estrutura\nanalise/<lote>/<version>/<timestamp>/]
     B --> C[Passo 2: Baseline\nfreeze_baseline SHA-256]
     C --> D[Passo 3: Leitura Integral\n.docx .pdf .xlsx .csv .txt .md]
     D --> E[Passo 4: Controles determinísticos]
     E --> F[Passo 5: SSOT JSON + HTML inicial]
     F --> S[Passo 5.0: Revisão semântica por skill]
     S --> V[Passo 5.1: Revisão visual\nquando houver imagens/diagramas]
-    V --> G[Passo 6: Finalização\nMover lote + Atualizar Central]
+    V --> ADJ[Passo 5.2: Adjudicação de achados\nadjudicate_findings]
+    ADJ --> G[Passo 6: Finalização\nMover lote + Atualizar Central]
 ```
 
 ---
@@ -64,9 +64,9 @@ flowchart TD
 │   └── requirements.txt                 # openpyxl, pypdf
 ├── framework/
 │   ├── revisao.md                       # Procedimento FCA-ENG-001
-│   ├── checklists/                      # 23 checklists por domínio
+│   ├── checklists/                      # 26 checklists por domínio
 │   ├── templates/                       # Templates de achados, saída e HTML
-│   └── normas/                          # Catálogo normativo
+│   └── normas/                          # Catálogo normativo (README.md)
 ├── entrada/                             # Lotes para análise (subpastas numeradas)
 │   └── lote-exemplo-rfp/
 │       ├── 00_RFP_Principal.docx

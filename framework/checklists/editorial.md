@@ -4,6 +4,7 @@
 |---|---|---|
 | Título, versão, estado e metadados de controle | Capa, rodapé e log | `index.html #resumo` |
 | Revisão ortográfica, gramatical, acentuação e pontuação | Lista de gralhas e correções | `index.html #erratas` |
+| Revisão ortográfica, gramatical, acentuação e pontuação | Lista de erros de digitação e correções | `index.html #erratas` |
 | Concordância verbal e nominal em requisitos | Relação sujeito-verbo conferida | `index.html #erratas` |
 | Termos, siglas e unidades consistentes (ex: Gbps, GHz, PoP) | Glossário e amostra | `index.html #fichas` |
 | Verbos normativos RFC 2119 (MUST, SHOULD, MAY, "deverá", "poderá") | Verbos auditados | `index.html #fichas` |

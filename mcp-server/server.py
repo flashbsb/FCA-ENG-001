@@ -14,6 +14,7 @@ import hashlib
 import zipfile
 import datetime
 import re
+import subprocess
 import xml.etree.ElementTree as ET
 from functools import lru_cache
 
@@ -23,6 +24,7 @@ if _current_dir not in sys.path:
 
 import html_compiler
 import audit_pipeline
+from audit_pipeline import sanitize_batch_isolation, clean_unicode_text
 import specialized_controls
 import cross_document
 import tabular_visual_controls
@@ -63,9 +65,20 @@ def _is_valid_analysis_identifier(ident: str) -> bool:
     if not parts or len(parts) > 5:
         return False
     for p in parts:
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+", p):
+        if p in ('.', '..') or not re.fullmatch(r"[A-Za-z0-9_.-]+", p):
             return False
     return True
+
+
+def _extract_batch_name(timestamp: str, rel_path: str = None) -> str:
+    """Extrai o nome do lote a partir do caminho relativo ou do sufixo do timestamp."""
+    ref = (rel_path or timestamp or "").strip().replace('\\', '/').strip('/')
+    parts = [p for p in ref.split('/') if p]
+    if len(parts) >= 2:
+        return parts[0]
+    leaf = parts[-1] if parts else ""
+    sub = leaf.split("_", 2)
+    return sub[2] if len(sub) > 2 else leaf
 
 
 def _resolve_analysis_dirs(root: str, timestamp_or_path: str = None) -> tuple:
@@ -267,20 +280,21 @@ DOMAIN_KEYWORDS = {
 }
 
 CHECKLIST_DOMAIN_MAP = {
-    "rfp":         ["contratos.md", "oss.md", "bss.md", "arquitetura.md", "integracoes.md", "editorial.md", "estrutura_e_referencias.md"],
-    "hld":         ["arquitetura.md", "datacenter.md", "cloud.md", "seguranca.md", "integracoes.md", "diagramas.md", "imagens.md"],
-    "lld":         ["arquitetura.md", "integracoes.md", "seguranca.md", "editorial.md"],
-    "contrato":    ["contratos.md", "editorial.md", "estrutura_e_referencias.md"],
-    "lgpd":        ["seguranca.md"],
+    "rfp":         ["rfp.md", "contratos.md", "oss.md", "bss.md", "arquitetura.md", "integracoes.md", "editorial.md", "estrutura_e_referencias.md"],
+    "hld":         ["hld.md", "arquitetura.md", "datacenter.md", "cloud.md", "seguranca.md", "integracoes.md", "diagramas.md", "imagens.md"],
+    "lld":         ["lld.md", "arquitetura.md", "integracoes.md", "seguranca.md", "editorial.md"],
+    "contrato":    ["contratos.md", "editorial.md", "estrutura_e_referencias.md", "iso.md", "itil.md"],
+    "lgpd":        ["lgpd.md", "seguranca.md", "iso.md"],
+    "planilha":    ["planilha.md", "tabelas.md", "editorial.md"],
     "oss":         ["oss.md", "bss.md", "integracoes.md", "tm_forum.md"],
     "bss":         ["bss.md", "oss.md", "integracoes.md"],
-    "seguranca":   ["seguranca.md", "arquitetura.md"],
-    "cloud":       ["cloud.md", "arquitetura.md", "seguranca.md"],
+    "seguranca":   ["seguranca.md", "arquitetura.md", "iso.md"],
+    "cloud":       ["cloud.md", "arquitetura.md", "seguranca.md", "iso.md"],
     "datacenter":  ["datacenter.md", "arquitetura.md", "seguranca.md"],
-    "integracoes": ["integracoes.md", "tm_forum.md", "arquitetura.md"],
+    "integracoes": ["integracoes.md", "tm_forum.md", "arquitetura.md", "rfc.md"],
     "tm_forum":    ["tm_forum.md", "integracoes.md", "oss.md"],
-    "arquitetura": ["arquitetura.md", "integracoes.md", "seguranca.md"],
-    "carrier":     ["carrier.md", "arquitetura.md", "integracoes.md"],
+    "arquitetura": ["arquitetura.md", "integracoes.md", "seguranca.md", "ieee.md"],
+    "carrier":     ["carrier.md", "mef.md", "rfc.md", "arquitetura.md", "integracoes.md"],
     "dwdm":        ["carrier.md", "arquitetura.md"],
     "dcn":         ["carrier.md", "arquitetura.md", "seguranca.md", "datacenter.md"],
 }
@@ -289,7 +303,8 @@ ALL_CHECKLISTS = [
     "oss.md", "bss.md", "seguranca.md", "contratos.md", "arquitetura.md",
     "cloud.md", "datacenter.md", "integracoes.md", "tm_forum.md", "imagens.md",
     "diagramas.md", "editorial.md", "estrutura_e_referencias.md", "carrier.md",
-    "tabelas.md", "fluxogramas.md", "ieee.md", "iso.md", "itil.md", "mef.md", "rfc.md"
+    "tabelas.md", "fluxogramas.md", "ieee.md", "iso.md", "itil.md", "mef.md", "rfc.md",
+    "rfp.md", "hld.md", "lld.md", "lgpd.md", "planilha.md"
 ]
 
 
@@ -329,26 +344,13 @@ def has_embedded_images(fpath: str, ext: str) -> bool:
 
 
 def extract_text_from_file(fpath: str) -> str:
-    """Extrai o texto legível de um arquivo (.docx, .pdf, .txt, .md, .json, .yaml)."""
+    """Extrai o texto legível de um arquivo (.docx, .pdf, .txt, .md, .json, .yaml, .xlsx, .csv)."""
     ext = os.path.splitext(fpath)[1].lower()
     text = ""
     if ext == '.docx':
-        try:
-            z = zipfile.ZipFile(fpath)
-            if 'word/document.xml' in z.namelist():
-                xml_content = z.read('word/document.xml')
-                tree = ET.fromstring(xml_content)
-                text = ' '.join(tree.itertext())
-        except Exception:
-            pass
+        text = extract_docx_text(fpath)
     elif ext == '.pdf':
-        try:
-            import pypdf
-            reader = pypdf.PdfReader(fpath)
-            for page in reader.pages:
-                text += page.extract_text() or ""
-        except Exception:
-            pass
+        text = extract_pdf_text(fpath)
     elif ext in ('.txt', '.md', '.json', '.yaml', '.yml', '.svg', '.drawio'):
         try:
             with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
@@ -367,7 +369,7 @@ def extract_text_from_file(fpath: str) -> str:
 
 
 def analyze_document_structure(fpath: str) -> list:
-    """Realiza a varredura não-técnica dos 6 pilares de integridade redacional e estrutural."""
+    """Realiza a varredura não-técnica dos 7 pilares de integridade redacional e estrutural."""
     filename = os.path.basename(fpath)
     text = extract_text_from_file(fpath)
     if not text:
@@ -509,6 +511,91 @@ def analyze_document_structure(fpath: str) -> list:
             'texto_sugerido': 'Explicitar o fuso horário oficial em todos os prazos: ex. "24x7x365 no fuso horário de Brasília (BRT / UTC-3)".',
             'proprietario': 'Gestão de Operações / Contratos',
             'id_acao': 'ACT-EDIT-006'
+        })
+
+    # Pilar 1: Sequência Numeral e Hierarquia (Saltos de numeração em títulos/seções)
+    sec_numbers = []
+    for line in text.splitlines():
+        m_sec = re.match(r'^\s*(?:#+\s*)?(\d+)\.(\d+)(?!\.\d)\s+[A-ZÁÉÍÓÚÂÊÔÃÕÇ]', line)
+        if m_sec:
+            sec_numbers.append((int(m_sec.group(1)), int(m_sec.group(2)), line.strip()[:60]))
+    jumps = []
+    for idx in range(1, len(sec_numbers)):
+        prev_maj, prev_min, prev_txt = sec_numbers[idx - 1]
+        cur_maj, cur_min, cur_txt = sec_numbers[idx]
+        if cur_maj == prev_maj and cur_min > prev_min + 1:
+            jumps.append(f"{prev_maj}.{prev_min} → {cur_maj}.{cur_min}")
+    if jumps:
+        sample_jumps = ', '.join(jumps[:3])
+        findings.append({
+            'id': 'EDIT-007',
+            'title': f'Quebra de sequência numeral de seções em {filename}',
+            'doc_origem': filename,
+            'loc': f'Estrutura de Seções ({sample_jumps})',
+            'cat': 'Integridade Redacional e Estrutural',
+            'tipo': 'Errata/Estrutura',
+            'evid': 'E3 (Confirmado por confronto direto)',
+            'crit': 'Baixa',
+            'prio': 'P3',
+            'fato': f'Foram identificados saltos na numeração sequencial de subseções ({sample_jumps}).',
+            'impacto': 'Dificulta a referência cruzada contratual e sugere supressão acidental de cláusulas ou seções.',
+            'tipo_solucao': 'De → Para (Minuta)',
+            'texto_atual': f'Sequência com salto: {sample_jumps}',
+            'texto_sugerido': 'Renumerar sequencialmente todas as seções e atualizar o sumário executivo.',
+            'proprietario': 'Revisão Editorial / Autor',
+            'id_acao': 'ACT-EDIT-007'
+        })
+
+    # Pilar 3: Referências Cruzadas Órfãs (menção "ver Tabela X" / "conforme Figura Y" sem legenda correspondente)
+    ref_calls = re.findall(r'\b(?:ver|conforme|vide|na|da)\s+(Tabela|Figura|Quadro)\s+(\d+)\b', text, re.IGNORECASE)
+    orphan_refs = []
+    for ref_kind, ref_num in ref_calls:
+        label_pat = re.compile(rf'\b{re.escape(ref_kind)}\s+{re.escape(ref_num)}\b', re.IGNORECASE)
+        occurrences = len(label_pat.findall(text))
+        if occurrences <= 1:
+            tag = f"{ref_kind.capitalize()} {ref_num}"
+            if tag not in orphan_refs:
+                orphan_refs.append(tag)
+    if orphan_refs:
+        sample_orphans = ', '.join(orphan_refs[:4])
+        findings.append({
+            'id': 'EDIT-008',
+            'title': f'Referências cruzadas órfãs a elementos visuais/tabulares em {filename}',
+            'doc_origem': filename,
+            'loc': 'Referências Internas do Corpo do Texto',
+            'cat': 'Integridade Redacional e Estrutural',
+            'tipo': 'Errata/Estrutura',
+            'evid': 'E2 (Corroborado)',
+            'crit': 'Média',
+            'prio': 'P2',
+            'fato': f'O texto cita elementos ({sample_orphans}) que ocorrem apenas na chamada referencial, sem legenda ou título correspondente no corpo do documento.',
+            'impacto': 'Quebra de rastreabilidade interna e possível ausência de tabela ou figura obrigatória.',
+            'tipo_solucao': 'Plano de Ação Estruturado',
+            'texto_atual': f'Referências sem destino localizado: {sample_orphans}',
+            'texto_sugerido': 'Inserir o elemento ausente com a respectiva legenda numerada ou corrigir o número referenciado.',
+            'proprietario': 'Autor Técnico / Revisão Editorial',
+            'id_acao': 'ACT-EDIT-008'
+        })
+
+    # Pilar 7 (ISO 80000): Mistura ambígua de unidades de transmissão (Gbps vs GB/s)
+    if re.search(r'\b\d+\s*Gbps\b', text) and re.search(r'\b\d+\s*GB/s\b', text):
+        findings.append({
+            'id': 'EDIT-009',
+            'title': f'Mistura ambígua de unidades de taxa de transmissão (Gbps vs GB/s) em {filename} (ISO 80000)',
+            'doc_origem': filename,
+            'loc': 'Especificações de Capacidade / Throughput',
+            'cat': 'Integridade Redacional e Estrutural',
+            'tipo': 'Ambiguidade',
+            'evid': 'E3 (Confirmado por confronto direto)',
+            'crit': 'Média',
+            'prio': 'P2',
+            'fato': 'O documento mistura no mesmo texto unidades em Gigabits por segundo (Gbps) e Gigabytes por segundo (GB/s), que diferem por fator de 8x.',
+            'impacto': 'Risco de dimensionamento incorreto de interfaces de rede ou barramentos de armazenamento.',
+            'tipo_solucao': 'De → Para (Minuta)',
+            'texto_atual': 'Uso simultâneo de Gbps e GB/s.',
+            'texto_sugerido': 'Padronizar taxas de rede em Gbps (bits/s) e taxas de disco/I/O em GB/s (Bytes/s) conforme ISO 80000.',
+            'proprietario': 'Engenharia de Sistemas / Redes',
+            'id_acao': 'ACT-EDIT-009'
         })
 
     return findings
@@ -753,8 +840,10 @@ def get_active_checklists(domains: list, has_images: bool, has_xlsx: bool) -> tu
     if has_images:
         active.add("imagens.md")
         active.add("diagramas.md")
+        active.add("fluxogramas.md")
     if has_xlsx:
         active.add("tabelas.md")
+        active.add("planilha.md")
 
     inactive = [c for c in ALL_CHECKLISTS if c not in active]
     return sorted(list(active)), sorted(inactive)
@@ -1153,7 +1242,7 @@ def _dump_decisoes_yaml(profiles: list, output_path: str, mode: str):
 
 
 def tool_analyze_structural_integrity(lote_path: str = "entrada") -> str:
-    """Executa a verificação automatizada dos 6 pilares de integridade estrutural e redacional sobre todos os arquivos do lote."""
+    """Executa a verificação automatizada dos 7 pilares de integridade estrutural e redacional sobre todos os arquivos do lote."""
     root = get_workspace_root()
     base_dir = os.path.join(root, lote_path) if not os.path.isabs(lote_path) else lote_path
     if not os.path.exists(base_dir):
@@ -1189,7 +1278,8 @@ def tool_scaffold_skill(skill_name: str, description: str = "", domain: str = ""
     title = skill_name.replace('-', ' ').title()
     domain_name = domain or title
     desc = description or f"Executa a revisão técnica especializada no domínio {domain_name}."
-    chk = checklist_file or f"{skill_name.replace('analisar-', '')}.md"
+    chk_raw = checklist_file or f"{skill_name.replace('analisar-', '')}.md"
+    chk = chk_raw if chk_raw.endswith('.md') else f"{chk_raw}.md"
 
     if os.path.exists(template_path):
         with open(template_path, 'r', encoding='utf-8') as tf:
@@ -1198,6 +1288,7 @@ def tool_scaffold_skill(skill_name: str, description: str = "", domain: str = ""
         content = content.replace('{{SKILL_DESCRIPTION}}', desc)
         content = content.replace('{{SKILL_TITLE}}', title)
         content = content.replace('{{SKILL_DOMAIN}}', domain_name)
+        content = content.replace('{{CHECKLIST_FILE}}.md', chk)
         content = content.replace('{{CHECKLIST_FILE}}', chk)
     else:
         content = f"""---
@@ -1219,7 +1310,7 @@ description: {desc}
 ## Workflow
 1. Identificar seções relevantes ao domínio {domain_name} no lote em `entrada/`.
 2. Aplicar checklist `framework/checklists/{chk}`.
-3. Registrar achados no `01_PONTOS_DE_ATENCAO.md` com Ficha 360° completa.
+3. Registrar achados na base `dados_analise.json` (SSOT) via `record_semantic_analysis` e recompilar `index.html`.
 """
 
     with open(skill_file, 'w', encoding='utf-8') as sf:
@@ -1316,11 +1407,16 @@ def tool_run_full_audit(lote_path: str = None) -> str:
         # Gera perguntas formais para lacunas e riscos de prioridade P0/P1
         esclarecimentos_list = []
         for idx, item in enumerate(lacunas_list + riscos_list, 1):
+            qid = f'Q-{idx:03d}'
             esclarecimentos_list.append({
+                'id': qid,
                 'id_pergunta': f'PERG-{idx:03d}',
+                'finding_id': item.get('id', ''),
+                'doc': item.get('doc_origem', lote_name),
                 'doc_ref': item.get('doc_origem', lote_name),
                 'secao_ref': item.get('loc', 'Geral'),
                 'pergunta': f"Favor esclarecer a seguinte pendência identificada no documento: {item.get('title')} ({item.get('fato')})",
+                'impacto': item.get('impacto', 'Mitigação de risco operacional e normativo.'),
                 'justificativa': item.get('impacto', 'Mitigação de risco operacional e normativo.'),
                 'destinatario': item.get('proprietario', 'Comissão Técnica / Gestor do Processo')
             })
@@ -1372,11 +1468,12 @@ def tool_run_full_audit(lote_path: str = None) -> str:
 
 def tool_get_visual_assets(timestamp: str, offset: int = 0, limit: int = 6) -> list[dict]:
     """Entrega imagens do inventário ao cliente MCP como conteúdo multimodal."""
-    if not re.fullmatch(r"\d{8}_\d{6}_[A-Za-z0-9_-]+", timestamp or ""):
+    if not _is_valid_analysis_identifier(timestamp):
         raise ValueError("Timestamp de análise inválido.")
     limit = max(1, min(int(limit), 8))
     offset = max(0, int(offset))
-    report_dir = os.path.join(get_workspace_root(), "analise", timestamp, "relatorios")
+    root = get_workspace_root()
+    _, report_dir, _, _ = _resolve_analysis_dirs(root, timestamp)
     inventory_path = os.path.join(report_dir, "inventario_visual.json")
     if not os.path.isfile(inventory_path):
         raise FileNotFoundError("Inventário visual não encontrado para essa análise.")
@@ -1406,12 +1503,12 @@ def tool_get_visual_assets(timestamp: str, offset: int = 0, limit: int = 6) -> l
 
 def tool_record_visual_analysis(timestamp: str, reviewed_asset_ids: list[str], findings: list[dict]) -> str:
     """Persiste achados multimodais vinculados a imagens e recompila o HTML."""
-    if not re.fullmatch(r"\d{8}_\d{6}_[A-Za-z0-9_-]+", timestamp or ""):
+    if not _is_valid_analysis_identifier(timestamp):
         raise ValueError("Timestamp de análise inválido.")
     if not isinstance(findings, list) or len(findings) > 100:
         raise ValueError("Informe uma lista de até 100 achados visuais.")
     root = get_workspace_root()
-    rel_dir = os.path.join(root, "analise", timestamp, "relatorios")
+    _, rel_dir, ent_dir, rel_path = _resolve_analysis_dirs(root, timestamp)
     json_path = os.path.join(rel_dir, "dados_analise.json")
     inventory_path = os.path.join(rel_dir, "inventario_visual.json")
     if not os.path.isfile(json_path) or not os.path.isfile(inventory_path):
@@ -1461,10 +1558,12 @@ def tool_record_visual_analysis(timestamp: str, reviewed_asset_ids: list[str], f
             baseline_paths = {str(item.get("path", "")) for item in data.get("baseline_files", [])}
             if text_doc_path not in baseline_paths:
                 raise ValueError(f"Documento de confronto do achado E3 #{ordinal} não pertence à baseline.")
-            lote_name = timestamp.split("_", 2)[2]
+            lote_name = _extract_batch_name(timestamp, rel_path)
             candidates = [
                 os.path.join(root, "entrada", lote_name, text_doc_path),
+                os.path.join(ent_dir, text_doc_path),
                 os.path.join(root, "analise", timestamp, "entrada", text_doc_path),
+                os.path.join(root, "entrada", text_doc_path),
             ]
             source_path = next((path for path in candidates if os.path.isfile(path)), None)
             if not source_path:
@@ -1565,12 +1664,15 @@ def _safe_baseline_path(base_dir: str, relative_path: str) -> str:
 
 def _resolve_baseline_document(root: str, timestamp: str, baseline_entry: dict) -> tuple[str, str]:
     """Localiza a cópia que ainda corresponde ao SHA-256 congelado."""
-    batch_name = timestamp.split("_", 2)[2]
+    _, _, ent_dir, rel_path = _resolve_analysis_dirs(root, timestamp)
+    batch_name = _extract_batch_name(timestamp, rel_path)
     relative_path = str(baseline_entry.get("path", ""))
     expected_hash = str(baseline_entry.get("sha256", ""))
     bases = [
         os.path.join(root, "entrada", batch_name),
+        ent_dir,
         os.path.join(root, "analise", timestamp, "entrada"),
+        os.path.join(root, "entrada"),
     ]
     mismatched = []
     for base in bases:
@@ -1669,10 +1771,11 @@ def _semantic_state_from_report(data: dict) -> dict:
 
 def tool_get_semantic_review_manifest(timestamp: str) -> str:
     """Lista escopos de leitura semântica, baseline e achados existentes para o agente."""
-    if not re.fullmatch(r"\d{8}_\d{6}_[A-Za-z0-9_-]+", timestamp or ""):
+    if not _is_valid_analysis_identifier(timestamp):
         raise ValueError("Timestamp de análise inválido.")
     root = get_workspace_root()
-    json_path = os.path.join(root, "analise", timestamp, "relatorios", "dados_analise.json")
+    _, rel_dir, _, _ = _resolve_analysis_dirs(root, timestamp)
+    json_path = os.path.join(rel_dir, "dados_analise.json")
     if not os.path.isfile(json_path):
         raise FileNotFoundError("Dados SSOT não encontrados para essa análise.")
     with open(json_path, "r", encoding="utf-8") as stream:
@@ -1717,10 +1820,11 @@ def tool_get_semantic_review_manifest(timestamp: str) -> str:
 def tool_get_semantic_document_chunk(timestamp: str, document_path: str, start_char: int = 0,
                                      max_chars: int = 12000) -> str:
     """Retorna um bloco textual de um documento da baseline, com hash e cursor verificáveis."""
-    if not re.fullmatch(r"\d{8}_\d{6}_[A-Za-z0-9_-]+", timestamp or ""):
+    if not _is_valid_analysis_identifier(timestamp):
         raise ValueError("Timestamp de análise inválido.")
     root = get_workspace_root()
-    json_path = os.path.join(root, "analise", timestamp, "relatorios", "dados_analise.json")
+    _, rel_dir, _, _ = _resolve_analysis_dirs(root, timestamp)
+    json_path = os.path.join(rel_dir, "dados_analise.json")
     if not os.path.isfile(json_path):
         raise FileNotFoundError("Dados SSOT não encontrados para essa análise.")
     with open(json_path, "r", encoding="utf-8") as stream:
@@ -1844,10 +1948,11 @@ def _refresh_analysis_outputs(data: dict, timestamp: str, root: str, build_maste
         kpis["iqd_denominador"] = denom
     else:
         _, kpis["iqd"], kpis["iqd_denominador"] = audit_engine.calculate_iqd(raw_for_calc, denom)
-    json_path = os.path.join(root, "analise", timestamp, "relatorios", "dados_analise.json")
+    _, rel_dir, _, rel_path = _resolve_analysis_dirs(root, timestamp)
+    json_path = os.path.join(rel_dir, "dados_analise.json")
     with open(json_path, "w", encoding="utf-8") as stream:
         json.dump(data, stream, ensure_ascii=False, indent=2)
-    html_compiler.compile_timestamp_html(timestamp, root_dir=root)
+    html_compiler.compile_timestamp_html(rel_path, root_dir=root)
     return json.loads(tool_build_master_index()) if build_master else {}
 
 
@@ -1926,12 +2031,13 @@ def _validate_adjudication_evidence(finding: dict, sources: list[dict], data: di
 
 def tool_adjudicate_findings(timestamp: str, decisions: list[dict]) -> str:
     """Registra a decisão de revisão para achados, preservando os candidatos e a trilha de auditoria."""
-    if not re.fullmatch(r"\d{8}_\d{6}_[A-Za-z0-9_-]+", timestamp or ""):
+    if not _is_valid_analysis_identifier(timestamp):
         raise ValueError("Timestamp de análise inválido.")
     if not isinstance(decisions, list) or not decisions or len(decisions) > 200:
         raise ValueError("Informe uma lista de 1 a 200 decisões de adjudicação.")
     root = get_workspace_root()
-    json_path = os.path.join(root, "analise", timestamp, "relatorios", "dados_analise.json")
+    _, rel_dir, _, _ = _resolve_analysis_dirs(root, timestamp)
+    json_path = os.path.join(rel_dir, "dados_analise.json")
     if not os.path.isfile(json_path):
         raise FileNotFoundError("Dados SSOT não encontrados para essa análise.")
     with open(json_path, "r", encoding="utf-8") as stream:
@@ -2014,14 +2120,15 @@ def tool_adjudicate_findings(timestamp: str, decisions: list[dict]) -> str:
 
 def tool_record_semantic_analysis(timestamp: str, reviewed_scopes: list[dict], findings: list[dict]) -> str:
     """Registra a revisão semântica, valida citações contra a baseline e recompila os relatórios."""
-    if not re.fullmatch(r"\d{8}_\d{6}_[A-Za-z0-9_-]+", timestamp or ""):
+    if not _is_valid_analysis_identifier(timestamp):
         raise ValueError("Timestamp de análise inválido.")
     if not isinstance(reviewed_scopes, list) or len(reviewed_scopes) > 1000:
         raise ValueError("reviewed_scopes deve ser uma lista de até 1000 escopos.")
     if not isinstance(findings, list) or len(findings) > 100:
         raise ValueError("Informe uma lista de até 100 achados semânticos por chamada.")
     root = get_workspace_root()
-    json_path = os.path.join(root, "analise", timestamp, "relatorios", "dados_analise.json")
+    _, rel_dir, _, rel_path = _resolve_analysis_dirs(root, timestamp)
+    json_path = os.path.join(rel_dir, "dados_analise.json")
     if not os.path.isfile(json_path):
         raise FileNotFoundError("Dados SSOT não encontrados para essa análise.")
     with open(json_path, "r", encoding="utf-8") as stream:
@@ -2058,7 +2165,7 @@ def tool_record_semantic_analysis(timestamp: str, reviewed_scopes: list[dict], f
     baseline_entries = {str(item.get("path", "")): item for item in data.get("baseline_files", [])}
     loaded_sources = {}
     normalized_candidates = []
-    batch_name = timestamp.split("_", 2)[2]
+    batch_name = _extract_batch_name(timestamp, rel_path)
     for ordinal, raw in enumerate(findings, 1):
         if not isinstance(raw, dict):
             raise ValueError(f"Achado semântico #{ordinal} deve ser um objeto.")
@@ -2334,20 +2441,25 @@ def tool_finalize_execution(timestamp: str, lote: str = None, version: str = Non
             pass
 
     if os.path.isdir(src_lote_dir):
-        for item in os.listdir(src_lote_dir):
-            if item.startswith('.') or item in ('README.md', 'decisoes.yaml'):
-                continue
-            src = os.path.join(src_lote_dir, item)
-            if not os.path.isfile(src):
-                continue
-            if baseline_filenames and item not in baseline_filenames:
-                continue
-            dst = os.path.join(dest_entrada, item)
-            shutil.copy2(src, dst)
-            os.remove(src)
-            moved.append(f"{detected_lote}/{item}" if detected_lote else item)
+        for dirpath, _, filenames in os.walk(src_lote_dir):
+            for item in sorted(filenames):
+                if item.startswith('.') or item in ('README.md', 'decisoes.yaml'):
+                    continue
+                src = os.path.join(dirpath, item)
+                rel_item = os.path.relpath(src, src_lote_dir).replace('\\', '/')
+                if baseline_filenames and item not in baseline_filenames and rel_item not in baseline_filenames:
+                    continue
+                dst = os.path.join(dest_entrada, rel_item)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy2(src, dst)
+                os.remove(src)
+                moved.append(f"{detected_lote}/{rel_item}" if detected_lote else rel_item)
 
-        rem_files = [f for f in os.listdir(src_lote_dir) if not f.startswith('.') and f not in ('README.md', 'decisoes.yaml')]
+        rem_files = []
+        for dirpath, _, filenames in os.walk(src_lote_dir):
+            for f in filenames:
+                if not f.startswith('.') and f not in ('README.md', 'decisoes.yaml'):
+                    rem_files.append(f)
         if not rem_files and src_lote_dir != entrada_dir:
             try:
                 shutil.rmtree(src_lote_dir)
@@ -2428,12 +2540,19 @@ def tool_create_review_revision(source_analysis: str, reason: str = "Ajuste e Ad
     os.makedirs(dest_ent, exist_ok=True)
     
     if os.path.isdir(src_ent):
-        for item in os.listdir(src_ent):
-            s = os.path.join(src_ent, item)
-            d = os.path.join(dest_ent, item)
-            if os.path.isfile(s):
+        for dirpath, _, filenames in os.walk(src_ent):
+            for item in sorted(filenames):
+                s = os.path.join(dirpath, item)
+                rel_item = os.path.relpath(s, src_ent)
+                d = os.path.join(dest_ent, rel_item)
+                os.makedirs(os.path.dirname(d), exist_ok=True)
                 shutil.copy2(s, d)
-                
+
+    src_visuais = os.path.join(src_rel, "visuais")
+    dest_visuais = os.path.join(dest_rel, "visuais")
+    if os.path.isdir(src_visuais) and not os.path.exists(dest_visuais):
+        shutil.copytree(src_visuais, dest_visuais)
+
     src_inv = os.path.join(src_rel, "inventario_visual.json")
     if os.path.isfile(src_inv):
         shutil.copy2(src_inv, os.path.join(dest_rel, "inventario_visual.json"))
@@ -2488,41 +2607,45 @@ def sanitize_batch_isolation(text: str) -> str:
     text = re.sub(r'Lote \d+', 'especificação técnica', text, flags=re.IGNORECASE)
     return text
 
-def clean_unicode_text(val):
-    """Normaliza texto Unicode em NFC, sanitiza surrogates/mojibake e garante isolamento estrito de lote."""
-    if not isinstance(val, str):
-        return val
-    if not val:
-        return ""
-    import unicodedata
-    # Sanitiza surrogates inválidos de filesystem Linux
-    val = val.encode('utf-8', errors='surrogateescape').decode('utf-8', errors='replace')
-    val = unicodedata.normalize('NFC', val)
-    val = val.replace('A\ufffdRequisitos', 'A — Requisitos')
-    val = val.replace('A?Requisitos', 'A — Requisitos')
-    val = val.replace('3\ufffdEm', '3ª Emissão')
-    val = val.replace('3?Em', '3ª Emissão')
-    val = val.replace('3Em', '3ª Emissão')
-    val = val.replace('MODERNIZA\ufffdO', 'MODERNIZAÇÃO')
-    val = val.replace('MODERNIZA??O', 'MODERNIZAÇÃO')
-    val = val.replace('MODERNIZAO', 'MODERNIZAÇÃO')
-    val = val.replace('T\ufffdcnica', 'Técnica')
-    val = val.replace('T?cnica', 'Técnica')
-    val = val.replace('Tcnica', 'Técnica')
-    val = val.replace('Especifica\ufffd\ufffdo', 'Especificação')
-    val = val.replace('Especifica??o', 'Especificação')
-    val = val.replace('Especificao', 'Especificação')
-    val = val.replace('Moderniza\ufffd\ufffdo', 'Modernização')
-    val = val.replace('Moderniza??o', 'Modernização')
-    val = val.replace('Modernizao', 'Modernização')
-    val = val.replace('An\ufffdlise', 'Análise')
-    val = val.replace('An?lise', 'Análise')
-    val = val.replace('Anlise', 'Análise')
-    val = val.replace('Comentario \ufffd', 'Comentário —')
-    val = val.replace('Comentario ?', 'Comentário —')
-    val = val.replace(' \ufffd ', ' — ')
-    val = val.replace('\ufffd', '')
-    return sanitize_batch_isolation(val)
+def tool_reconcile_versions(previous_timestamp: str, current_timestamp: str) -> str:
+    """
+    Compara duas rodadas/versões de análise (previous_timestamp vs current_timestamp),
+    gera o Quadro de Reconciliação Técnica e Evolução (Diff de Achados: sanados, reincidentes, novos),
+    persiste version_reconciliation em dados_analise.json da análise atual e recompila os relatórios HTML.
+    """
+    if not _is_valid_analysis_identifier(previous_timestamp) or not _is_valid_analysis_identifier(current_timestamp):
+        raise ValueError("Identificadores de análise inválidos para reconciliação de versões.")
+    root = get_workspace_root()
+    _, prev_rel, _, prev_relpath = _resolve_analysis_dirs(root, previous_timestamp)
+    _, curr_rel, _, curr_relpath = _resolve_analysis_dirs(root, current_timestamp)
+
+    prev_json_path = os.path.join(prev_rel, "dados_analise.json")
+    curr_json_path = os.path.join(curr_rel, "dados_analise.json")
+    if not os.path.isfile(prev_json_path) or not os.path.isfile(curr_json_path):
+        raise FileNotFoundError("dados_analise.json não encontrado em uma das versões informadas.")
+
+    with open(prev_json_path, "r", encoding="utf-8") as f:
+        prev_data = json.load(f)
+    with open(curr_json_path, "r", encoding="utf-8") as f:
+        curr_data = json.load(f)
+
+    import audit_engine
+    reconciliation = audit_engine.reconcile_versions(prev_data, curr_data)
+    curr_data["version_reconciliation"] = reconciliation
+    with open(curr_json_path, "w", encoding="utf-8") as f:
+        json.dump(curr_data, f, indent=2, ensure_ascii=False)
+
+    html_compiler.compile_timestamp_html(curr_relpath, root_dir=root)
+    tool_build_master_index()
+    return json.dumps({
+        "status": "success",
+        "previous_analysis": prev_relpath,
+        "current_analysis": curr_relpath,
+        "reconciliation": reconciliation,
+    }, indent=2, ensure_ascii=False)
+
+
+from audit_pipeline import sanitize_batch_isolation, clean_unicode_text
 
 
 def tool_build_master_index() -> str:
@@ -2618,7 +2741,7 @@ def tool_build_master_index() -> str:
                 or (adjudication_state["pending"] and current_kpis.get("iqd") != "—")
             )
             if needs_adjudication_sync:
-                _refresh_analysis_outputs(data_json, ts, root, build_master=False)
+                _refresh_analysis_outputs(data_json, rel_path, root, build_master=False)
 
         if data_json:
             import audit_engine
@@ -3128,6 +3251,14 @@ TOOLS_MANIFEST = [
         }, "required": ["source_analysis"]}
     },
     {
+        "name": "reconcile_versions",
+        "description": "Compara duas versões/rodadas de análise (previous_timestamp vs current_timestamp), gera o Quadro de Reconciliação Técnica e Evolução (sanados, reincidentes e novos achados), persiste em dados_analise.json e recompila o HTML.",
+        "inputSchema": {"type": "object", "properties": {
+            "previous_timestamp": {"type": "string", "description": "Timestamp ou caminho relativo da versão anterior."},
+            "current_timestamp": {"type": "string", "description": "Timestamp ou caminho relativo da versão atual."}
+        }, "required": ["previous_timestamp", "current_timestamp"]}
+    },
+    {
         "name": "build_master_index",
         "description": "Recompila analise/index.html e analise/manifest.json varrendo todos os relatórios.",
         "inputSchema": {"type": "object", "properties": {}, "required": []}
@@ -3181,6 +3312,8 @@ def dispatch_tool(name: str, args: dict) -> str:
         return tool_finalize_execution(args.get("timestamp", ""), args.get("lote"), args.get("version"))
     elif name == "create_review_revision":
         return tool_create_review_revision(args.get("source_analysis", ""), args.get("reason", "Ajuste e Adjudicação de Relatório"), args.get("reviewer", "auditor"))
+    elif name == "reconcile_versions":
+        return tool_reconcile_versions(args.get("previous_timestamp", ""), args.get("current_timestamp", ""))
     elif name == "build_master_index":
         return tool_build_master_index()
     else:

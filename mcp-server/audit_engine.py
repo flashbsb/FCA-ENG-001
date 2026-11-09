@@ -9,6 +9,7 @@ import os
 import re
 import math
 import json
+from audit_pipeline import sanitize_batch_isolation, clean_unicode_text
 
 
 
@@ -23,7 +24,7 @@ def calculate_iqd(achados: list, total_verificaveis: int = None) -> tuple:
 
     # Conta achados por criticidade (impactam o IQD negativamente)
     pesos = {"Crítica": 4, "Alta": 3, "Média": 2, "Baixa": 1, "Informativa": 0}
-    impacto_total = sum(pesos.get(a.get('crit', 'Média'), 2) for a in achados)
+    impacto_total = sum(pesos.get(a.get('crit') or a.get('criticidade', 'Média'), 2) for a in achados)
 
     # Denominador: total de itens verificáveis (estimado se não fornecido)
     denom = total_verificaveis if total_verificaveis and total_verificaveis > 0 else max(len(achados) * 5, 20)
@@ -45,7 +46,8 @@ def calculate_parecer(achados: list, lacunas: list) -> tuple:
     Retorna (parecer_extenso, parecer_badge)
     """
     criticos_p0 = [a for a in achados
-                   if a.get('crit', '').upper() == 'CRÍTICA' and a.get('prio', '').upper() == 'P0']
+                   if (a.get('crit') or a.get('criticidade', '')).upper() == 'CRÍTICA'
+                   and (a.get('prio') or a.get('prioridade', '')).upper() == 'P0']
 
     if criticos_p0:
         return "NÃO APTO PARA DECISÃO", "NÃO APTO"
@@ -60,52 +62,6 @@ def _safe(val: any, fallback: str = "não disponível") -> str:
     """Retorna o valor como string ou o fallback se vazio."""
     s = str(val).strip() if val is not None else ""
     return s if s and s.lower() not in ("none", "null", "") else fallback
-
-
-def sanitize_batch_isolation(val):
-    """Recursivamente remove referências a outros lotes e sanitiza texto para garantir isolamento por lote."""
-    if isinstance(val, str):
-        if not val:
-            return val
-        import unicodedata
-        val = val.encode('utf-8', errors='surrogateescape').decode('utf-8', errors='replace')
-        val = unicodedata.normalize('NFC', val)
-        val = re.sub(r'Idêntico ao achado [A-Z]{2,5}-\d{3} do Lote \d+:?\s*', '', val, flags=re.IGNORECASE)
-        val = re.sub(r'— mesmo padrão do Lote \d+', '', val, flags=re.IGNORECASE)
-        val = re.sub(r'\(Lote \d+\)', '', val, flags=re.IGNORECASE)
-        val = re.sub(r'\(Lotes \d+(?:,\s*\d+)*(?:\s*e\s*\d+)?\)', '', val, flags=re.IGNORECASE)
-        val = re.sub(r'Lote \d+ \(([^)]+)\)', r'\1', val, flags=re.IGNORECASE)
-        val = re.sub(r'Lote \d+', 'especificação técnica', val, flags=re.IGNORECASE)
-        val = val.replace('A\ufffdRequisitos', 'A — Requisitos')
-        val = val.replace('A?Requisitos', 'A — Requisitos')
-        val = val.replace('3\ufffdEm', '3ª Emissão')
-        val = val.replace('3?Em', '3ª Emissão')
-        val = val.replace('3Em', '3ª Emissão')
-        val = val.replace('MODERNIZA\ufffdO', 'MODERNIZAÇÃO')
-        val = val.replace('MODERNIZA??O', 'MODERNIZAÇÃO')
-        val = val.replace('MODERNIZAO', 'MODERNIZAÇÃO')
-        val = val.replace('T\ufffdcnica', 'Técnica')
-        val = val.replace('T?cnica', 'Técnica')
-        val = val.replace('Tcnica', 'Técnica')
-        val = val.replace('Especifica\ufffd\ufffdo', 'Especificação')
-        val = val.replace('Especifica??o', 'Especificação')
-        val = val.replace('Especificao', 'Especificação')
-        val = val.replace('Moderniza\ufffd\ufffdo', 'Modernização')
-        val = val.replace('Moderniza??o', 'Modernização')
-        val = val.replace('Modernizao', 'Modernização')
-        val = val.replace('An\ufffdlise', 'Análise')
-        val = val.replace('An?lise', 'Análise')
-        val = val.replace('Anlise', 'Análise')
-        val = val.replace('Comentario \ufffd', 'Comentário —')
-        val = val.replace('Comentario ?', 'Comentário —')
-        val = val.replace(' \ufffd ', ' — ')
-        val = val.replace('\ufffd', '')
-        return val
-    elif isinstance(val, list):
-        return [sanitize_batch_isolation(item) for item in val]
-    elif isinstance(val, dict):
-        return {k: sanitize_batch_isolation(v) for k, v in val.items()}
-    return val
 
 
 def generate_6_reports(rel_dir: str, data: dict) -> str:
@@ -147,10 +103,10 @@ def generate_6_reports(rel_dir: str, data: dict) -> str:
     n_redacoes = len(redacoes) + len(erratas)
     n_perguntas = len(esclarecimentos)
 
-    criticos = [a for a in achados if a.get('crit', '').upper() == 'CRÍTICA']
-    altos = [a for a in achados if a.get('crit', '').upper() == 'ALTA']
-    medios = [a for a in achados if a.get('crit', '').upper() == 'MÉDIA']
-    baixos = [a for a in achados if a.get('crit', '').upper() in ('BAIXA', 'INFORMATIVA')]
+    criticos = [a for a in achados if (a.get('crit') or a.get('criticidade', '')).upper() == 'CRÍTICA']
+    altos = [a for a in achados if (a.get('crit') or a.get('criticidade', '')).upper() == 'ALTA']
+    medios = [a for a in achados if (a.get('crit') or a.get('criticidade', '')).upper() == 'MÉDIA']
+    baixos = [a for a in achados if (a.get('crit') or a.get('criticidade', '')).upper() in ('BAIXA', 'INFORMATIVA')]
 
     # ──────────────────────────────────────────────────
     # Normalização dos Achados e Estrutura dos Dados
@@ -161,7 +117,7 @@ def generate_6_reports(rel_dir: str, data: dict) -> str:
         para_txt = _safe(a.get("para", a.get("texto_sugerido", "")))
         tipo_str = _safe(a.get("tipo", "Erro Técnico"))
         is_dir = bool(de_txt or para_txt or "→" in tipo_str or "grafia" in tipo_str.lower() or "sequência" in tipo_str.lower())
-        normalized_findings.append({
+        item = {
             "id": a.get("id", "ACH-000"),
             "title": _safe(a.get("title", a.get("titulo", ""))),
             "doc_origem": _safe(a.get("doc_origem", a.get("documento", ""))),
@@ -191,7 +147,11 @@ def generate_6_reports(rel_dir: str, data: dict) -> str:
             "source_kind": _safe(a.get("source_kind", ""), ""),
             "evidence_sources": a.get("evidence_sources", []),
             "referencias": a.get("referencias", []),
-        })
+        }
+        for optional_key in ("adjudication", "adjudication_status", "texto_afirmado", "diagrama_demonstrado"):
+            if optional_key in a and a[optional_key] is not None:
+                item[optional_key] = a[optional_key]
+        normalized_findings.append(item)
 
     json_payload = {
         "schema_version": data.get("schema_version", "2.1"),
@@ -227,6 +187,16 @@ def generate_6_reports(rel_dir: str, data: dict) -> str:
         "esclarecimentos": esclarecimentos,
         "checklists_status": checklists_status
     }
+    for extra_key in (
+        "adjudication_summary",
+        "decision_status",
+        "audit_trail",
+        "parent_analysis",
+        "version_reconciliation",
+        "metadata",
+    ):
+        if extra_key in data and data[extra_key] is not None:
+            json_payload[extra_key] = data[extra_key]
 
     def _clean_surrogates(obj):
         if isinstance(obj, str):
@@ -316,56 +286,76 @@ def reconcile_versions(json_antigo: dict, json_novo: dict) -> dict:
 
     for fa in findings_antigos:
         fa_id = fa.get("id", "")
-        fa_tit = _simplify(fa.get("titulo", ""))
-        fa_cat = fa.get("categoria", "")
+        fa_tit_raw = fa.get("title") or fa.get("titulo") or ""
+        fa_tit = _simplify(fa_tit_raw)
+        fa_cat = fa.get("categoria") or fa.get("cat") or ""
+        fa_loc = fa.get("loc") or fa.get("localizacao") or ""
 
         matched_fn = None
         for fn in findings_novos:
             fn_id = fn.get("id", "")
             if fn_id in matched_new_ids:
                 continue
-            fn_tit = _simplify(fn.get("titulo", ""))
-            fn_cat = fn.get("categoria", "")
+            fn_tit_raw = fn.get("title") or fn.get("titulo") or ""
+            fn_tit = _simplify(fn_tit_raw)
+            fn_cat = fn.get("categoria") or fn.get("cat") or ""
 
             # Match por ID direto ou por similaridade forte de título na mesma categoria
-            if (fa_id and fn_id and fa_id == fn_id) or (fa_cat == fn_cat and (fa_tit in fn_tit or fn_tit in fa_tit)):
+            id_match = bool(fa_id and fn_id and fa_id == fn_id)
+            title_match = bool(
+                fa_cat and fn_cat and fa_cat == fn_cat
+                and fa_tit and fn_tit
+                and (fa_tit in fn_tit or fn_tit in fa_tit)
+            )
+            if id_match or title_match:
                 matched_fn = fn
                 matched_new_ids.add(fn_id)
                 break
 
         if matched_fn:
+            fn_tit_raw = matched_fn.get("title") or matched_fn.get("titulo") or fa_tit_raw
+            fn_loc = matched_fn.get("loc") or matched_fn.get("localizacao") or ""
             reincidentes.append({
                 "id_anterior": fa_id,
                 "id_atual": matched_fn.get("id", ""),
-                "titulo": matched_fn.get("titulo", fa.get("titulo", "")),
+                "title": fn_tit_raw,
+                "titulo": fn_tit_raw,
                 "criticidade": matched_fn.get("criticidade", matched_fn.get("crit", "Média")),
                 "prioridade": matched_fn.get("prioridade", matched_fn.get("prio", "P2")),
-                "categoria": matched_fn.get("categoria", fa_cat),
-                "localizacao_anterior": fa.get("localizacao", ""),
-                "localizacao_atual": matched_fn.get("localizacao", ""),
+                "categoria": matched_fn.get("categoria", matched_fn.get("cat", fa_cat)),
+                "loc_anterior": fa_loc,
+                "loc_atual": fn_loc,
+                "localizacao_anterior": fa_loc,
+                "localizacao_atual": fn_loc,
                 "status": "reincidente"
             })
         else:
             sanados.append({
                 "id_anterior": fa_id,
-                "titulo": fa.get("titulo", ""),
+                "title": fa_tit_raw,
+                "titulo": fa_tit_raw,
                 "criticidade": fa.get("criticidade", fa.get("crit", "Média")),
                 "prioridade": fa.get("prioridade", fa.get("prio", "P2")),
                 "categoria": fa_cat,
-                "localizacao": fa.get("localizacao", ""),
+                "loc": fa_loc,
+                "localizacao": fa_loc,
                 "status": "sanado"
             })
 
     for fn in findings_novos:
         fn_id = fn.get("id", "")
         if fn_id not in matched_new_ids:
+            fn_tit_raw = fn.get("title") or fn.get("titulo") or ""
+            fn_loc = fn.get("loc") or fn.get("localizacao") or ""
             novos.append({
                 "id_atual": fn_id,
-                "titulo": fn.get("titulo", ""),
+                "title": fn_tit_raw,
+                "titulo": fn_tit_raw,
                 "criticidade": fn.get("criticidade", fn.get("crit", "Média")),
                 "prioridade": fn.get("prioridade", fn.get("prio", "P2")),
-                "categoria": fn.get("categoria", ""),
-                "localizacao": fn.get("localizacao", ""),
+                "categoria": fn.get("categoria", fn.get("cat", "")),
+                "loc": fn_loc,
+                "localizacao": fn_loc,
                 "status": "novo"
             })
 

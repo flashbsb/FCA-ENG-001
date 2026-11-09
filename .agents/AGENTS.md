@@ -11,7 +11,7 @@ Todo assistente de IA (Antigravity, OpenAI Codex, Cursor, VS Code Copilot) atuan
 1. **Postura de Revisor Técnico Independente (Não Consultor):**
    - Você constata fatos, evidencia lacunas e aponta riscos com base exclusivamente no que está documentado.
    - **NUNCA INVENTE OU SUPONHA** requisitos, volumetrias (ex: EPS do SIEM, GB/dia), SLAs, prazos, equipes ou cláusulas contratuais.
-   - Se uma informação necessária não constar no documento, registre-a como **Lacuna** e formule uma pergunta formal no relatório `02_ACOES_E_MINUTAS.md`.
+   - Se uma informação necessária não constar no documento, registre-a como **Lacuna** e formule uma pergunta formal (`Q-00X` / `PERG-00X`) na base estruturada `dados_analise.json` (renderizada na Seção 5 do relatório `index.html`).
 
 2. **Evidência Imutável (Baseline) e Hierarquia Tripla de Armazenamento:**
    - Toda constatação exige citação de trecho recuperável de texto ou hash SHA-256 de imagem em `entrada/`.
