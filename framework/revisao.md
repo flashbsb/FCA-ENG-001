@@ -1,7 +1,7 @@
 # Procedimento Corporativo de Revisão Técnica Independente (RTI)
 
 **Identificador:** FCA-ENG-001  
-**Versão:** 1.3.0  
+**Versão:** 1.4.0  
 **Estado:** Baseline interna de governança documental e engenharia  
 **Aplicação:** Telecom, datacenter, OSS/BSS, segurança, cloud, arquitetura, RFP/RFQ, contratos e estudos técnicos.
 

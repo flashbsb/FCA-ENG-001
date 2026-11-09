@@ -3337,7 +3337,7 @@ def main():
             response = {"jsonrpc": "2.0", "id": req_id, "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "fca-eng-001-rti", "version": "2.0.0"}
+                "serverInfo": {"name": "fca-eng-001-rti", "version": "1.4.0"}
             }}
         elif method == "tools/list":
             response = {"jsonrpc": "2.0", "id": req_id, "result": {"tools": TOOLS_MANIFEST}}

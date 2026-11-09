@@ -4,6 +4,48 @@ Todas as alterações graduais, correções e melhorias arquiteturais implementa
 
 ---
 
+## [1.4.0] - 2026-11-09
+### Adicionado
+- **Ferramenta MCP de Reconciliação de Versões (`reconcile_versions` / `tool_reconcile_versions`):**
+  - Exposição da função `reconcile_versions` no manifesto MCP (`TOOLS_MANIFEST`) e no despachante `dispatch_tool` em `mcp-server/server.py`.
+  - Persistência automática do bloco `version_reconciliation` no `dados_analise.json` da versão atual e recompilação imediata do `index.html`.
+  - Renderização visual do **Quadro de Reconciliação Técnica e Evolução (Diff de Versões)** na Seção 1 (`_build_resumo_html`) de `mcp-server/html_compiler.py`, exibindo KPIs evolutivos (IQD Anterior vs. Atual, Δ IQD, Taxa de Resolução e contagens de achados Sanados, Reincidentes e Novos/Regressões).
+- **Controles Determinísticos dos 7 Pilares Estruturais e Editoriais (`analyze_document_structure`):**
+  - `EDIT-007`: Detecção de saltos na sequência numérica de seções (ex.: `3.1` → `3.3`) — Pilar 1.
+  - `EDIT-008`: Detecção de referências cruzadas órfãs a Tabelas e Figuras citadas no corpo do texto sem legenda/definição correspondente — Pilar 3.
+  - `EDIT-009`: Detecção de coexistência ambígua de unidades de taxa de transferência/capacidade (`Gbps` vs `GB/s`, `Mbps` vs `MB/s`) — Pilar 7 (ISO 80000).
+- **Cobertura Integral dos 26 Checklists Técnicos:**
+  - Mapeamento completo de `rfp.md`, `hld.md`, `lld.md`, `lgpd.md` e `planilha.md` em `CHECKLIST_DOMAIN_MAP`, `ALL_CHECKLISTS` e `get_active_checklists` (`mcp-server/server.py`) e em `RULE_PREFIX_CHECKLIST_MAP`, `SKILL_CHECKLIST_MAP` e `AUTOMATED_CHECKLISTS` (`mcp-server/audit_pipeline.py`).
+- **Expansão da Suíte de Testes Unitários (`mcp-server/tests/test_adjudication.py`):**
+  - Novos testes automatizados cobrindo reconciliação entre versões (`reconcile_versions`), resolução de caminhos na hierarquia tripla (`<lote>/<version>/<timestamp>`), criação de revisão com subpastas (`create_review_revision`) e ativação dos 26 checklists + 7 pilares estruturais.
+
+### Corrigido
+- **Preservação de Adjudicações e Metadados na Recompilação (`mcp-server/audit_engine.py`):**
+  - `generate_6_reports` agora preserva integralmente os atributos `adjudication`, `adjudication_status`, `texto_afirmado`, `diagrama_demonstrado` nos achados, bem como `adjudication_summary`, `decision_status`, `audit_trail`, `parent_analysis`, `version_reconciliation` e `metadata` no nível raiz do `dados_analise.json`.
+  - `calculate_iqd` e `calculate_parecer` corrigidos para ler tanto `'crit'`/`'criticidade'` quanto `'prio'`/`'prioridade'`, garantindo recálculo fiel após adjudicações ou inserções de achados semânticos/visuais.
+  - `reconcile_versions` corrigido para ler tanto `'title'`/`'titulo'` quanto `'loc'`/`'localizacao'`, evitando colisões com chaves vazias.
+- **Suporte Universal à Hierarquia Tripla (`<lote>/<version>/<timestamp>`) em Todas as Tools MCP:**
+  - Unificação da validação `_is_valid_analysis_identifier` (com bloqueio estrito de segmentos `.` e `..`) e da resolução `_resolve_analysis_dirs` em `tool_get_visual_assets`, `tool_record_visual_analysis`, `tool_get_semantic_review_manifest`, `tool_get_semantic_document_chunk`, `_resolve_baseline_document`, `_refresh_analysis_outputs`, `tool_adjudicate_findings` e `tool_record_semantic_analysis`.
+  - Cópia e movimentação recursiva de subpastas da baseline (incluindo `visuais/` e anexos aninhados) em `tool_finalize_execution` e `tool_create_review_revision`.
+  - Cálculo dinâmico do link relativo `../../index.html` / `../../../index.html` para o Portal Master em `compile_timestamp_html`.
+- **Alinhamento de Chaves do Caderno de Perguntas Formais (Seção 5 do HTML):**
+  - Compatibilização entre `tool_run_full_audit` e `_build_acoes_html` para suportar simultaneamente `id`/`id_pergunta`, `doc`/`doc_ref`, `secao_ref` e `impacto`/`justificativa`.
+- **Extração de Texto `.docx` e `.pdf` com Preservação de Parágrafos:**
+  - Unificação de `extract_text_from_file` em `mcp-server/server.py` para utilizar `extract_docx_text` e `extract_pdf_text`, preservando quebras de linha essenciais para os controles estruturais e normativos.
+- **Remoção de Falso Positivo `DIA-NOME` e de Hardcodes Legados:**
+  - Desativação da regra `DIA-NOME` em `mcp-server/specialized_controls.py`, alinhando o motor à diretriz de `analisar-diagramas/SKILL.md`.
+  - Remoção de substituições de texto específicas de projetos legados em `clean_unicode_text` e centralização de `sanitize_batch_isolation` e `clean_unicode_text` em `mcp-server/audit_pipeline.py`.
+
+### Segurança
+- **Sanitização HTML em Atributos e Filtros (`mcp-server/html_compiler.py`):**
+  - Aplicação de `html.escape(..., quote=True)` nos atributos `data-*` das linhas da Matriz Master SSOT e nas opções `<option>` de documentos no filtro interativo.
+
+### Documentação
+- **Padronização de Documentação, Normas, Checklists e Skills:**
+  - Atualização de `framework/revisao.md`, `.agents/AGENTS.md`, `README.md`, `framework/checklists/editorial.md`, `framework/templates/modelo_skill.md`, `framework/normas/README.md` e das skills em `.agents/skills/` para refletir as 22 ferramentas MCP, os 26 checklists, a hierarquia tripla e a arquitetura SSOT (`dados_analise.json` + `index.html`).
+
+---
+
 ## [1.3.0] - 2026-10-14
 ### Adicionado
 - **Hierarquia Tripla Canônica (`analise/<lote>/<version>/<timestamp>/`):**

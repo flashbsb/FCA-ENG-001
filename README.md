@@ -1,6 +1,6 @@
 # Framework Corporativo de Revisão Técnica Independente (FCA-ENG-001)
 
-[![Versão](https://img.shields.io/badge/Versão-2.0.0-blue.svg)](framework/revisao.md)
+[![Versão](https://img.shields.io/badge/Versão-1.4.0-blue.svg)](framework/revisao.md)
 [![Procedimento](https://img.shields.io/badge/Código-FCA--ENG--001-green.svg)](framework/revisao.md)
 
 O **FCA-ENG-001** é um framework padronizado para condução de **Revisão Técnica Independente (RTI)** sobre documentações de engenharia, RFPs, RFIs, HLDs, LLDs, planilhas de especificação, arquitetura de sistemas e contratos de TI/Telecom/Cloud.
