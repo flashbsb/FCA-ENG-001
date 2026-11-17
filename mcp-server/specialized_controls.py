@@ -13,19 +13,42 @@ def _quote(text: str, match: re.Match | None, radius: int = 220) -> str:
     if not text or not match:
         return ""
     start, end = match.span()
-    return re.sub(r"\s+", " ", text[max(0, start - radius):min(len(text), end + radius)]).strip()
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", end)
+    if line_end == -1:
+        line_end = len(text)
+    if line_end - line_start >= 15 and "\n" not in text[start:end]:
+        win_start = max(line_start, start - radius)
+        win_end = min(line_end, end + radius)
+    else:
+        win_start = max(0, start - radius)
+        win_end = min(len(text), end + radius)
+    return re.sub(r"\s+", " ", text[win_start:win_end]).strip()
 
 
 def _finding(rule_id: str, title: str, doc: dict, match: re.Match | None, *, category: str,
              finding_type: str, fact: str, impact: str, crit: str = "Média", prio: str = "P2") -> dict:
-    citation = _quote(doc.get("text", ""), match)
+    text = doc.get("text", "")
+    citation = _quote(text, match)
+    line_no = (text[:match.start()].count("\n") + 1) if (text and match) else 1
+    loc_str = f"Linha {line_no}"
+    evid_str = (
+        "E2 (Corroborado por controle determinístico)"
+        if crit in ("Crítica", "Alta")
+        else "E1 (trecho extraído da baseline)"
+    )
     return {
         "rule_id": rule_id, "title": title, "doc_origem": doc["name"],
-        "doc_path": doc["relative_path"], "loc": "Trecho identificado automaticamente; confirmar seção/página.",
+        "doc_path": doc["relative_path"], "loc": loc_str, "localizacao_exata": loc_str,
         "cat": category, "tipo": finding_type,
-        "evid": "E1 (trecho extraído da baseline)", "crit": crit, "prio": prio,
+        "evid": evid_str, "crit": crit, "prio": prio,
         "citacao": citation, "fato": fact, "impacto": impact,
         "tipo_solucao": "Plano de Ação Estruturado", "proprietario": "Área técnica responsável",
+        "referencias": [{
+            "titulo": f"Catálogo Normativo FCA-ENG-001 ({rule_id})",
+            "url": "",
+            "nota": "Controle determinístico de domínio.",
+        }],
     }
 
 

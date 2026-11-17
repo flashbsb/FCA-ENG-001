@@ -48,22 +48,44 @@ def spreadsheet_text_conflicts(documents: list[dict]) -> list[dict]:
                 if not label_tokens or not all(token in lower for token in label_tokens):
                     continue
                 position = min(lower.find(token) for token in label_tokens)
-                context = re.sub(r"\s+", " ", body[max(0, position - 120):position + 320])
+                context = re.sub(r"\s+", " ", body[max(0, position - 120):position + 320]).strip()
                 numbers = {value.replace(",", ".") for value in re.findall(r"\b\d+(?:[.,]\d+)?\b", context)}
                 if numbers and quantity not in numbers:
                     key = (sheet["relative_path"], text_doc["relative_path"], _clean(label), quantity)
                     if key in seen:
                         continue
                     seen.add(key)
+                    sheet_text = sheet.get("text", "")
+                    row_pos = sheet_text.find(row)
+                    sheet_line = (sheet_text[:row_pos].count("\n") + 1) if row_pos >= 0 else 1
+                    text_line = body[:position].count("\n") + 1
+                    sheet_loc = f"Linha {sheet_line}"
+                    text_loc = f"Linha {text_line}"
                     findings.append({
                         "rule_id": "XREF-QTD", "title": "Quantitativo divergente entre planilha e documento textual",
                         "doc_origem": sheet["name"], "doc_path": sheet["relative_path"],
-                        "loc": "Linha de planilha e trecho textual correlacionado", "cat": "Planilha / Quantitativo",
+                        "loc": f"{sheet_loc} (confronto com {text_doc['name']} {text_loc})", "cat": "Planilha / Quantitativo",
                         "tipo": "Inconsistência", "evid": "E3 (confronto direto entre planilha e texto)", "crit": "Alta", "prio": "P1",
                         "citacao": f"{sheet['name']}: {row} | {text_doc['name']}: {context}",
                         "fato": f"A planilha informa {quantity} para '{label}', mas o trecho correlacionado contém quantitativo diferente.",
                         "impacto": "O dimensionamento e a estimativa do escopo podem ser inconsistentes.",
                         "tipo_solucao": "Plano de Ação Estruturado", "proprietario": "Engenharia de Requisitos / Planejamento",
+                        "evidence_sources": [
+                            {
+                                "document_path": sheet["relative_path"],
+                                "document_name": sheet["name"],
+                                "location": sheet_loc,
+                                "quote": row,
+                                "sha256": sheet.get("sha256", ""),
+                            },
+                            {
+                                "document_path": text_doc["relative_path"],
+                                "document_name": text_doc["name"],
+                                "location": text_loc,
+                                "quote": context,
+                                "sha256": text_doc.get("sha256", ""),
+                            },
+                        ],
                     })
     return findings
 

@@ -12,7 +12,10 @@ def analyze_hld(documents: list[dict]) -> list[dict]:
         if doc.get("ext") not in (".pdf", ".docx", ".txt", ".md"):
             continue
         text = doc.get("text", "")
-        trigger = re.search(r"\b(?:hld|high\s+level\s+design|arquitetura\s+(?:de\s+)?alto\s+n[ií]vel)\b", doc["name"] + "\n" + text, re.I)
+        hld_rx = r"\b(?:hld|high\s+level\s+design|arquitetura\s+(?:de\s+)?alto\s+n[ií]vel)\b"
+        trigger = re.search(hld_rx, text, re.I)
+        if not trigger and re.search(hld_rx, doc["name"], re.I):
+            trigger = re.search(r"\S+", text)
         if not trigger:
             continue
         has_visual = any(d.get("ext") in (".png", ".jpg", ".jpeg", ".svg", ".drawio", ".bmp") for d in documents)

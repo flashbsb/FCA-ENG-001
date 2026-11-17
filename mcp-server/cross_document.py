@@ -6,7 +6,18 @@ import re
 
 
 def _context(text: str, match: re.Match, radius: int = 160) -> str:
-    return re.sub(r"\s+", " ", text[max(0, match.start() - radius):min(len(text), match.end() + radius)]).strip()
+    start, end = match.span()
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", end)
+    if line_end == -1:
+        line_end = len(text)
+    if line_end - line_start >= 15 and "\n" not in text[start:end]:
+        win_start = max(line_start, start - radius)
+        win_end = min(line_end, end + radius)
+    else:
+        win_start = max(0, start - radius)
+        win_end = min(len(text), end + radius)
+    return re.sub(r"\s+", " ", text[win_start:win_end]).strip()
 
 
 def delivery_deadline_conflicts(documents: list[dict]) -> list[dict]:
@@ -16,22 +27,51 @@ def delivery_deadline_conflicts(documents: list[dict]) -> list[dict]:
     for doc in documents:
         for match in rx.finditer(doc.get("text", "")):
             matches.append((doc, match, f"{match.group(1)} {match.group(2).lower()}"))
-    values = {value for _, _, value in matches}
-    docs = {doc["relative_path"] for doc, _, _ in matches}
-    if len(values) < 2 or len(docs) < 2:
+    pair = next(
+        (
+            (a, b)
+            for i, a in enumerate(matches)
+            for b in matches[i + 1:]
+            if a[0]["relative_path"] != b[0]["relative_path"] and a[2] != b[2]
+        ),
+        None,
+    )
+    if not pair:
         return []
-    first, second = matches[0], next(item for item in matches if item[2] != matches[0][2])
+    first, second = pair
     doc_a, match_a, value_a = first
     doc_b, match_b, value_b = second
+    line_a = doc_a["text"][:match_a.start()].count("\n") + 1
+    line_b = doc_b["text"][:match_b.start()].count("\n") + 1
+    loc_a = f"Linha {line_a}"
+    loc_b = f"Linha {line_b}"
+    quote_a = _context(doc_a["text"], match_a)
+    quote_b = _context(doc_b["text"], match_b)
     return [{
         "rule_id": "XREF-PRAZO", "title": "Divergência de prazo de entrega entre documentos do lote",
         "doc_origem": doc_a["name"], "doc_path": doc_a["relative_path"],
-        "loc": "Confronto cruzado de prazos de entrega", "cat": "Correlação cruzada",
+        "loc": f"{loc_a} (confronto com {doc_b['name']} {loc_b})", "cat": "Correlação cruzada",
         "tipo": "Inconsistência", "evid": "E3 (confronto direto entre documentos)", "crit": "Alta", "prio": "P1",
-        "citacao": f"{doc_a['name']}: {_context(doc_a['text'], match_a)} | {doc_b['name']}: {_context(doc_b['text'], match_b)}",
+        "citacao": f"{doc_a['name']}: {quote_a} | {doc_b['name']}: {quote_b}",
         "fato": f"Os documentos declaram prazos de entrega distintos: {value_a} e {value_b}.",
         "impacto": "O cronograma e o critério de aceite não possuem referência única.",
         "tipo_solucao": "Plano de Ação Estruturado", "proprietario": "Gestão de Contratos / Engenharia",
+        "evidence_sources": [
+            {
+                "document_path": doc_a["relative_path"],
+                "document_name": doc_a["name"],
+                "location": loc_a,
+                "quote": quote_a,
+                "sha256": doc_a.get("sha256", ""),
+            },
+            {
+                "document_path": doc_b["relative_path"],
+                "document_name": doc_b["name"],
+                "location": loc_b,
+                "quote": quote_b,
+                "sha256": doc_b.get("sha256", ""),
+            },
+        ],
     }]
 
 
@@ -48,10 +88,11 @@ def standards_without_edition(documents: list[dict]) -> list[dict]:
             if standard in seen or re.search(r"\b(?:19|20)\d{2}\b|ed(?:iç[aã]o|\.)?\s*\d+", context, re.I):
                 continue
             seen.add(standard)
+            loc_str = f"Linha {text[:match.start()].count(chr(10)) + 1}"
             findings.append({
                 "rule_id": "RFP-NORMA", "title": "Norma referenciada sem edição identificável",
                 "doc_origem": doc["name"], "doc_path": doc["relative_path"],
-                "loc": "Trecho de referência normativa", "cat": "RFP / Edital", "tipo": "Lacuna",
+                "loc": loc_str, "localizacao_exata": loc_str, "cat": "RFP / Edital", "tipo": "Lacuna",
                 "evid": "E1 (trecho extraído da baseline)", "crit": "Média", "prio": "P2",
                 "citacao": context, "fato": f"A referência a {standard} não apresenta ano ou edição no trecho extraído.",
                 "impacto": "A versão normativa aplicável não fica objetivamente determinada.",

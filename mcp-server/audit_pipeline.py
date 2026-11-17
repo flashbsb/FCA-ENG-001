@@ -13,7 +13,37 @@ import unicodedata
 from collections import defaultdict
 
 
+import semantic_pipeline
+
+
 SCHEMA_VERSION = "2.3"
+LITERAL_QUOTE_KEYS = {"citacao", "evidencia_literal", "quote", "evidence_sources"}
+GENERIC_LOCATIONS = {
+    "",
+    "localização a confirmar",
+    "localizacao a confirmar",
+    "a confirmar",
+    "localização desconhecida",
+    "localizacao desconhecida",
+    "trecho identificado automaticamente; confirmar seção/página.",
+}
+
+
+def _clean_literal_unicode(val):
+    """Normaliza Unicode NFC e remove surrogates sem alterar a literalidade de citações."""
+    if isinstance(val, str):
+        if not val:
+            return val
+        val = val.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace")
+        val = unicodedata.normalize("NFC", val)
+        val = re.sub(r"[\ud800-\udfff]", "", val)
+        val = val.replace("\ufffd", "")
+        return val
+    elif isinstance(val, list):
+        return [_clean_literal_unicode(item) for item in val]
+    elif isinstance(val, dict):
+        return {k: _clean_literal_unicode(v) for k, v in val.items()}
+    return val
 
 
 def sanitize_batch_isolation(val):
@@ -28,14 +58,16 @@ def sanitize_batch_isolation(val):
         val = re.sub(r"\(Lote \d+\)", "", val, flags=re.IGNORECASE)
         val = re.sub(r"\(Lotes \d+(?:,\s*\d+)*(?:\s*e\s*\d+)?\)", "", val, flags=re.IGNORECASE)
         val = re.sub(r"Lote \d+ \(([^)]+)\)", r"\1", val, flags=re.IGNORECASE)
-        val = re.sub(r"Lote \d+", "especificação técnica", val, flags=re.IGNORECASE)
         val = val.replace(" \ufffd ", " — ")
         val = val.replace("\ufffd", "")
         return val
     elif isinstance(val, list):
         return [sanitize_batch_isolation(item) for item in val]
     elif isinstance(val, dict):
-        return {k: sanitize_batch_isolation(v) for k, v in val.items()}
+        return {
+            k: (_clean_literal_unicode(v) if k in LITERAL_QUOTE_KEYS else sanitize_batch_isolation(v))
+            for k, v in val.items()
+        }
     return val
 
 
@@ -74,18 +106,74 @@ EVIDENCE_ANCHORS = {
 
 
 def _excerpt(text: str, needles: list[str], limit: int = 360) -> str:
-    """Retorna uma citação literal curta, preferindo o primeiro termo relevante."""
-    clean = re.sub(r"\s+", " ", text or " ").strip()
-    if not clean:
+    """Retorna uma citação literal curta, preferindo linha única com o termo relevante."""
+    if not text or not text.strip():
         return ""
+    lines = text.splitlines()
+    for needle in needles:
+        if not needle:
+            continue
+        needle_cf = needle.casefold()
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("[ABA:"):
+                continue
+            if needle_cf in stripped.casefold():
+                collapsed = re.sub(r"\s+", " ", stripped).strip()
+                if len(collapsed) <= limit:
+                    return collapsed
+                pos = collapsed.casefold().find(needle_cf)
+                start = max(0, pos - 100)
+                end = min(len(collapsed), pos + len(needle) + 220)
+                return collapsed[start:end].strip()
+    clean = re.sub(r"\s+", " ", text).strip()
     lower = clean.lower()
     for needle in needles:
+        if not needle:
+            continue
         pos = lower.find(needle.lower())
         if pos >= 0:
             start = max(0, pos - 100)
             end = min(len(clean), pos + len(needle) + 220)
-            return clean[start:end]
+            return clean[start:end].strip()
+    for line in lines:
+        collapsed = re.sub(r"\s+", " ", line).strip()
+        if collapsed and not collapsed.startswith("[ABA:"):
+            return collapsed[:limit].strip()
     return clean[:limit]
+
+
+def _find_line_location(text: str, snippet: str) -> str:
+    """Localiza a linha 1-based onde o trecho ocorre no texto extraído."""
+    if not text or not snippet:
+        return "Linha 1"
+    clean_snip = re.sub(r"\s+", " ", snippet).strip()
+    if not clean_snip:
+        return "Linha 1"
+    lines = text.splitlines()
+    for probe_len in (80, 40):
+        probe = clean_snip[:probe_len].casefold()
+        if len(probe) < 6 and probe_len == 40:
+            continue
+        for idx, line in enumerate(lines, 1):
+            if probe in re.sub(r"\s+", " ", line).strip().casefold():
+                return f"Linha {idx}"
+    short_probe = clean_snip[:40].casefold()
+    if short_probe:
+        pos = text.casefold().find(short_probe)
+        if pos >= 0:
+            return f"Linha {text[:pos].count(chr(10)) + 1}"
+    words = [w for w in re.findall(r"[A-Za-zÀ-ÿ0-9_-]{4,}", clean_snip)][:5]
+    if len(words) >= 2:
+        rx = re.compile(r"\s+".join(re.escape(w) for w in words[:3]), re.I)
+        match = rx.search(text)
+        if match:
+            return f"Linha {text[:match.start()].count(chr(10)) + 1}"
+    for word in words:
+        for idx, line in enumerate(lines, 1):
+            if word.casefold() in line.casefold():
+                return f"Linha {idx}"
+    return "Linha 1"
 
 
 def _stable_id(lote_name: str, finding: dict, source_text: str, ordinal: int) -> str:
@@ -100,12 +188,13 @@ def _stable_id(lote_name: str, finding: dict, source_text: str, ordinal: int) ->
 
 def normalize_findings(lote_name: str, findings: list[dict], documents: list[dict]) -> list[dict]:
     """Impõe o contrato mínimo, evidencia literal e ID único a cada achado."""
-    docs_by_name = {d["name"]: d for d in documents}
+    docs_by_path = {d.get("relative_path"): d for d in documents if d.get("relative_path")}
+    docs_by_name = {d.get("name"): d for d in documents if d.get("name")}
     seen = set()
     normalized = []
     for ordinal, raw in enumerate(findings, 1):
         item = dict(raw)
-        doc = docs_by_name.get(item.get("doc_origem"), {})
+        doc = docs_by_path.get(item.get("doc_path")) or docs_by_name.get(item.get("doc_origem"), {})
         source = doc.get("text", "")
         item["rule_id"] = item.get("rule_id") or item.get("id", "ACH")
         item["doc_path"] = doc.get("relative_path") or item.get("doc_path") or item.get("doc_origem", "")
@@ -117,12 +206,50 @@ def normalize_findings(lote_name: str, findings: list[dict], documents: list[dic
             citation = _excerpt(source, anchors + [item.get("rule_id", ""), item.get("title", "")])
         item["citacao"] = citation
         item["evidencia_literal"] = citation
-        item["localizacao_exata"] = item.get("localizacao_exata") or item.get("loc") or "Localização a confirmar"
+
+        loc_raw = str(item.get("localizacao_exata") or item.get("loc") or "").strip()
+        loc_norm = semantic_pipeline.normalize_evidence_text(loc_raw)
+        is_generic_loc = (
+            not loc_raw
+            or len(loc_raw) < 2
+            or loc_norm in GENERIC_LOCATIONS
+            or "confirmar seção/página" in loc_norm
+            or "confirmar secao/pagina" in loc_norm
+        )
+        if is_generic_loc:
+            computed_loc = _find_line_location(source, citation) if citation else "Linha 1"
+            item["localizacao_exata"] = computed_loc
+            item["loc"] = computed_loc
+        else:
+            item["localizacao_exata"] = loc_raw
+            if not item.get("loc"):
+                item["loc"] = loc_raw
+
         # Achados de ausência dependem de cobertura do documento, não de uma citação inventada.
         if item.get("tipo") == "Lacuna" and not citation:
             item["evid"] = "E1 (ausência verificada na extração disponível)"
-        elif citation and not item.get("evid"):
+        elif citation and not item.get("evid") and not item.get("evidencia"):
             item["evid"] = "E1 (trecho extraído da baseline)"
+
+        if not item.get("evidence_sources") and citation and item.get("doc_path"):
+            if source and semantic_pipeline.quote_is_literal(source, citation):
+                item["evidence_sources"] = [{
+                    "document_path": item["doc_path"],
+                    "document_name": doc.get("name") or item.get("doc_origem", ""),
+                    "location": item["localizacao_exata"],
+                    "quote": citation,
+                    "sha256": doc.get("sha256", ""),
+                }]
+
+        ev_str = str(item.get("evid") or item.get("evidencia") or "").strip().upper()
+        ev_level = ev_str.split()[0] if ev_str else ""
+        if ev_level == "E2" and len(item.get("evidence_sources") or []) == 1 and not item.get("referencias"):
+            item["referencias"] = [{
+                "titulo": f"Catálogo Normativo FCA-ENG-001 ({item['rule_id']})",
+                "url": "",
+                "nota": "Verificação determinística sobre a baseline documental.",
+            }]
+
         candidate = _stable_id(lote_name, item, source, ordinal)
         while candidate in seen:
             ordinal += 1
@@ -288,22 +415,49 @@ def find_cross_document_conflicts(documents: list[dict]) -> list[dict]:
     values = defaultdict(list)
     pattern = re.compile(r"\b(?:sla|disponibilidade)[^\n.]{0,120}?(\d{1,2}[,.]\d{1,4})\s*%", re.I)
     for doc in documents:
-        for match in pattern.finditer(doc.get("text", "")):
+        text = doc.get("text", "")
+        for match in pattern.finditer(text):
             value = match.group(1).replace(",", ".")
-            values[value].append((doc, match.group(0)))
+            line_no = text[:match.start()].count("\n") + 1
+            values[value].append((doc, match.group(0), line_no))
     if len(values) < 2:
         return []
     refs = [(value, entries[0]) for value, entries in values.items() if entries]
-    if len({entry[1][0]["name"] for entry in refs}) < 2:
+    if len({entry[1][0]["relative_path"] for entry in refs}) < 2:
         return []
-    value_a, (doc_a, quote_a) = refs[0]
-    value_b, (doc_b, quote_b) = refs[1]
-    return [{"rule_id": "XREF-SLA", "title": "Divergência de meta de SLA entre documentos do lote",
-             "doc_origem": doc_a["name"], "doc_path": doc_a["relative_path"],
-             "loc": "Trecho de SLA; confronto cruzado", "cat": "Correlação cruzada", "tipo": "Inconsistência",
-             "evid": "E3 (confronto direto entre documentos)", "crit": "Alta", "prio": "P1",
-             "citacao": f"{doc_a['name']}: {quote_a} | {doc_b['name']}: {quote_b}",
-             "fato": f"O lote contém metas de SLA divergentes: {value_a}% e {value_b}%.",
-             "impacto": "A divergência impede um critério único de aceite e apuração contratual.",
-             "tipo_solucao": "Plano de Ação Estruturado", "proprietario": "Gestão de Contratos / Engenharia"}]
+    first = refs[0]
+    second = next(
+        (r for r in refs[1:] if r[1][0]["relative_path"] != first[1][0]["relative_path"]),
+        refs[1],
+    )
+    value_a, (doc_a, quote_a, line_a) = first
+    value_b, (doc_b, quote_b, line_b) = second
+    loc_a = f"Linha {line_a}"
+    loc_b = f"Linha {line_b}"
+    return [{
+        "rule_id": "XREF-SLA", "title": "Divergência de meta de SLA entre documentos do lote",
+        "doc_origem": doc_a["name"], "doc_path": doc_a["relative_path"],
+        "loc": f"{loc_a} (confronto com {doc_b['name']} {loc_b})", "cat": "Correlação cruzada", "tipo": "Inconsistência",
+        "evid": "E3 (confronto direto entre documentos)", "crit": "Alta", "prio": "P1",
+        "citacao": f"{doc_a['name']}: {quote_a} | {doc_b['name']}: {quote_b}",
+        "fato": f"O lote contém metas de SLA divergentes: {value_a}% e {value_b}%.",
+        "impacto": "A divergência impede um critério único de aceite e apuração contratual.",
+        "tipo_solucao": "Plano de Ação Estruturado", "proprietario": "Gestão de Contratos / Engenharia",
+        "evidence_sources": [
+            {
+                "document_path": doc_a["relative_path"],
+                "document_name": doc_a["name"],
+                "location": loc_a,
+                "quote": quote_a,
+                "sha256": doc_a.get("sha256", ""),
+            },
+            {
+                "document_path": doc_b["relative_path"],
+                "document_name": doc_b["name"],
+                "location": loc_b,
+                "quote": quote_b,
+                "sha256": doc_b.get("sha256", ""),
+            },
+        ],
+    }]
 

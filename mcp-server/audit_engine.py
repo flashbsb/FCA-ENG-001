@@ -93,28 +93,13 @@ def generate_6_reports(rel_dir: str, data: dict) -> str:
         if not esc.get('id') or esc['id'] == "não disponível":
             esc['id'] = f"Q-{idx:03d}"
 
-    parecer_ext, parecer_badge = calculate_parecer(achados, lacunas)
-    iqd_val, iqd_str, denom = calculate_iqd(achados, iqd_denominador)
-
-    # Contagens para KPIs
-    n_achados = len(achados)
-    n_lacunas = len(lacunas)
-    n_riscos = len(riscos)
-    n_redacoes = len(redacoes) + len(erratas)
-    n_perguntas = len(esclarecimentos)
-
-    criticos = [a for a in achados if (a.get('crit') or a.get('criticidade', '')).upper() == 'CRÍTICA']
-    altos = [a for a in achados if (a.get('crit') or a.get('criticidade', '')).upper() == 'ALTA']
-    medios = [a for a in achados if (a.get('crit') or a.get('criticidade', '')).upper() == 'MÉDIA']
-    baixos = [a for a in achados if (a.get('crit') or a.get('criticidade', '')).upper() in ('BAIXA', 'INFORMATIVA')]
-
     # ──────────────────────────────────────────────────
     # Normalização dos Achados e Estrutura dos Dados
     # ──────────────────────────────────────────────────
     normalized_findings = []
     for a in achados:
-        de_txt = _safe(a.get("de", a.get("texto_atual", "")))
-        para_txt = _safe(a.get("para", a.get("texto_sugerido", "")))
+        de_txt = _safe(a.get("de", a.get("texto_atual", "")), "")
+        para_txt = _safe(a.get("para", a.get("texto_sugerido", "")), "")
         tipo_str = _safe(a.get("tipo", "Erro Técnico"))
         is_dir = bool(de_txt or para_txt or "→" in tipo_str or "grafia" in tipo_str.lower() or "sequência" in tipo_str.lower())
         item = {
@@ -134,7 +119,7 @@ def generate_6_reports(rel_dir: str, data: dict) -> str:
             "prioridade": _safe(a.get("prio", a.get("prioridade", "P2"))),
             "fato": _safe(a.get("fato", "")),
             "impacto": _safe(a.get("impacto", "")),
-            "solucao": _safe(a.get("solucao", a.get("mitigacao", ""))),
+            "solucao": _safe(a.get("solucao", a.get("mitigacao", "")), ""),
             "de": de_txt,
             "para": para_txt,
             "is_direct": is_dir,
@@ -153,6 +138,60 @@ def generate_6_reports(rel_dir: str, data: dict) -> str:
                 item[optional_key] = a[optional_key]
         normalized_findings.append(item)
 
+    valid_adjudication_statuses = {
+        "pendente", "confirmado", "falso_positivo", "fora_de_escopo",
+        "evidencia_insuficiente", "duplicado",
+    }
+    adj_counts = {s: 0 for s in valid_adjudication_statuses}
+    confirmed = []
+    for item in normalized_findings:
+        adj = item.get("adjudication")
+        st = adj.get("status") if isinstance(adj, dict) else item.get("adjudication_status")
+        if not isinstance(st, str) or st not in valid_adjudication_statuses:
+            st = "pendente"
+        if st == "pendente" and not isinstance(adj, dict):
+            item["adjudication_status"] = "pendente"
+        adj_counts[st] += 1
+        if st == "confirmado":
+            confirmed.append(item)
+
+    pending_count = adj_counts["pendente"] + adj_counts["evidencia_insuficiente"]
+    excluded_count = adj_counts["falso_positivo"] + adj_counts["fora_de_escopo"] + adj_counts["duplicado"]
+
+    lacunas_conf = [a for a in confirmed if "lacuna" in str(a.get("tipo", "")).lower()]
+    riscos_conf = [a for a in confirmed if "risco" in str(a.get("tipo", "")).lower()]
+    lacunas_out = lacunas_conf if normalized_findings else lacunas
+    riscos_out = riscos_conf if normalized_findings else riscos
+
+    if pending_count > 0:
+        parecer_ext, parecer_badge = "PENDENTE DE ADJUDICAÇÃO", "PENDENTE"
+        iqd_str = "—"
+        denom = iqd_denominador if iqd_denominador and iqd_denominador > 0 else max(len(confirmed) * 5, 20)
+        decision_status = "pendente_adjudicacao"
+    else:
+        parecer_ext, parecer_badge = calculate_parecer(confirmed, lacunas_out)
+        _, iqd_str, denom = calculate_iqd(confirmed, iqd_denominador)
+        decision_status = "concluido"
+
+    # Contagens para KPIs baseadas em achados confirmados
+    n_achados = len(normalized_findings)
+    n_lacunas = len(lacunas_out)
+    n_riscos = len(riscos_out)
+    n_redacoes = len(redacoes) + len(erratas)
+    n_perguntas = len(esclarecimentos)
+
+    criticos = [a for a in confirmed if str(a.get("criticidade", "")).upper() == "CRÍTICA"]
+    altos = [a for a in confirmed if str(a.get("criticidade", "")).upper() == "ALTA"]
+    medios = [a for a in confirmed if str(a.get("criticidade", "")).upper() in ("MÉDIA", "MEDIA")]
+    baixos = [a for a in confirmed if str(a.get("criticidade", "")).upper() in ("BAIXA", "INFORMATIVA")]
+    estruturais = [
+        a for a in confirmed
+        if any(
+            kw in (str(a.get("tipo", "")) + " " + str(a.get("categoria", ""))).casefold()
+            for kw in ("estrutur", "redacional", "rfc 2119", "iso 29148")
+        )
+    ]
+
     json_payload = {
         "schema_version": data.get("schema_version", "2.1"),
         "cobertura_extracao": data.get("cobertura_extracao", {}),
@@ -164,12 +203,18 @@ def generate_6_reports(rel_dir: str, data: dict) -> str:
         "timestamp": timestamp,
         "parecer": parecer_ext,
         "parecer_badge": parecer_badge,
+        "decision_status": decision_status,
+        "adjudication_summary": adj_counts,
         "kpis": {
             "total_achados": n_achados,
+            "achados_confirmados": len(confirmed),
+            "achados_pendentes_adjudicacao": pending_count,
+            "achados_excluidos": excluded_count,
             "criticos": len(criticos),
             "altos": len(altos),
             "medios": len(medios),
             "baixos": len(baixos),
+            "estruturais": len(estruturais),
             "lacunas": n_lacunas,
             "riscos": n_riscos,
             "redacoes": n_redacoes,
@@ -180,16 +225,14 @@ def generate_6_reports(rel_dir: str, data: dict) -> str:
         "baseline_files": baseline_files,
         "skills_ativas": skills_ativas,
         "findings": normalized_findings,
-        "lacunas": lacunas,
-        "riscos": riscos,
+        "lacunas": lacunas_out,
+        "riscos": riscos_out,
         "redacoes": redacoes,
         "erratas": erratas,
         "esclarecimentos": esclarecimentos,
         "checklists_status": checklists_status
     }
     for extra_key in (
-        "adjudication_summary",
-        "decision_status",
         "audit_trail",
         "parent_analysis",
         "version_reconciliation",
@@ -221,7 +264,10 @@ def detect_document_versions(filenames: list[str]) -> dict:
     Identifica se há múltiplos arquivos que representam versões sucessivas (série histórica).
     Retorna um dicionário {doc_base: [{'filename': ..., 'version': ..., 'order': ...}, ...]}.
     """
-    version_regex = re.compile(r'[_vV\- ]+(\d+(?:\.\d+)*)', re.IGNORECASE)
+    version_regex = re.compile(
+        r'(?:^|[_ \-])(?:v|ver|vers[aã]o|rev)[_ \-]*(\d+(?:\.\d+)*)|[_ \-](\d+\.\d+(?:\.\d+)*)$',
+        re.IGNORECASE,
+    )
     groups = {}
 
     for fname in sorted(filenames):
@@ -230,10 +276,10 @@ def detect_document_versions(filenames: list[str]) -> dict:
         # Tenta extrair a versão
         match = version_regex.search(base_name)
         if match:
-            ver_str = match.group(1)
-            # Chave do documento removendo a versão
-            canonical_key = re.sub(r'[_vV\- ]+' + re.escape(ver_str), '', base_name).strip('_- ')
-            canonical_key = re.sub(r'\s+', '_', canonical_key).upper()
+            ver_str = match.group(1) or match.group(2)
+            # Chave do documento removendo o marcador de versão encontrado
+            stripped = (base_name[:match.start()] + base_name[match.end():]).strip('_- ')
+            canonical_key = re.sub(r'[_\s-]+', '_', stripped or base_name).upper()
             try:
                 # Transforma '1.8' em (1, 8) para ordenação correta
                 parts = tuple(int(p) for p in ver_str.split('.') if p.isdigit())

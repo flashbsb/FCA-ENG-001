@@ -154,26 +154,137 @@ def ensure_infrastructure(root: str = None):
 # Extratores de Conteúdo por Formato
 # ─────────────────────────────────────────────
 
-def extract_docx_text(fpath: str) -> str:
-    """Extrai texto de .docx preservando estrutura de parágrafos."""
+def _read_text_with_fallback(fpath: str, max_chars: int = None) -> str:
+    """Lê arquivo textual tentando UTF-8 e fazendo fallback para cp1252/latin-1."""
     try:
-        z = zipfile.ZipFile(fpath)
+        with open(fpath, 'rb') as f:
+            raw = f.read(max_chars * 4 if max_chars else -1)
+    except Exception:
+        return ''
+    for enc in ('utf-8-sig', 'utf-8', 'cp1252', 'latin-1'):
+        try:
+            text = raw.decode(enc)
+            return text[:max_chars] if max_chars else text
+        except UnicodeDecodeError:
+            continue
+    text = raw.decode('utf-8', errors='replace')
+    return text[:max_chars] if max_chars else text
+
+
+def _extract_docx_lines(fpath: str) -> tuple[list[str], list[str]]:
+    """Extrai linhas de .docx (parágrafos, tabelas, listas e cabeçalhos/rodapés)."""
+    w_ns = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+    ns = {'w': w_ns}
+    plain_lines = []
+    located_lines = []
+
+    with zipfile.ZipFile(fpath) as z:
+        abstract_fmts = {}
+        num_map = {}
+        if 'word/numbering.xml' in z.namelist():
+            try:
+                num_tree = ET.fromstring(z.read('word/numbering.xml'))
+                for abs_el in num_tree.findall('w:abstractNum', ns):
+                    abs_id = abs_el.get(f'{{{w_ns}}}abstractNumId', '')
+                    lvls = {}
+                    for lvl_el in abs_el.findall('w:lvl', ns):
+                        ilvl_str = lvl_el.get(f'{{{w_ns}}}ilvl', '')
+                        fmt_el = lvl_el.find('w:numFmt', ns)
+                        if ilvl_str.isdigit() and fmt_el is not None:
+                            lvls[int(ilvl_str)] = fmt_el.get(f'{{{w_ns}}}val', '')
+                    if abs_id:
+                        abstract_fmts[abs_id] = lvls
+                for num_el in num_tree.findall('w:num', ns):
+                    nid = num_el.get(f'{{{w_ns}}}numId', '')
+                    abs_ref = num_el.find('w:abstractNumId', ns)
+                    if nid and abs_ref is not None:
+                        num_map[nid] = abs_ref.get(f'{{{w_ns}}}val', '')
+            except Exception:
+                pass
+
+        counters = {}
+        para_idx = 0
+        tbl_idx = 0
+
+        def _para_text(p_el) -> str:
+            txt = ''.join(r.text or '' for r in p_el.findall('.//w:t', ns)).strip()
+            if not txt:
+                return ''
+            num_pr = p_el.find('./w:pPr/w:numPr', ns)
+            if num_pr is not None:
+                nid_el = num_pr.find('w:numId', ns)
+                ilvl_el = num_pr.find('w:ilvl', ns)
+                nid = nid_el.get(f'{{{w_ns}}}val', '') if nid_el is not None else ''
+                ilvl_raw = ilvl_el.get(f'{{{w_ns}}}val', '0') if ilvl_el is not None else '0'
+                ilvl = int(ilvl_raw) if ilvl_raw.isdigit() else 0
+                if nid and nid != '0':
+                    fmt = abstract_fmts.get(num_map.get(nid, ''), {}).get(ilvl, '')
+                    if fmt == 'bullet' and not txt.startswith(('-', '•', '*')):
+                        txt = f'- {txt}'
+                    elif fmt == 'decimal':
+                        counters[(nid, ilvl)] = counters.get((nid, ilvl), 0) + 1
+                        for k in [k for k in counters if k[0] == nid and k[1] > ilvl]:
+                            del counters[k]
+                        prefix = '.'.join(str(counters.get((nid, lvl), 1)) for lvl in range(ilvl + 1))
+                        if not re.match(r'^\d+(?:\.\d+)*[\.\s)]', txt):
+                            txt = f'{prefix} {txt}'
+            return txt
+
+        def _walk_container(container, section_tag: str = None):
+            nonlocal para_idx, tbl_idx
+            for child in list(container):
+                if child.tag == f'{{{w_ns}}}p':
+                    txt = _para_text(child)
+                    if txt:
+                        if section_tag:
+                            plain_lines.append(txt)
+                            located_lines.append(f'[{section_tag}] {txt}')
+                        else:
+                            para_idx += 1
+                            plain_lines.append(txt)
+                            located_lines.append(f'[Parágrafo {para_idx}] {txt}')
+                elif child.tag == f'{{{w_ns}}}tbl':
+                    tbl_idx += 1
+                    for row_idx, tr in enumerate(child.findall('./w:tr', ns), 1):
+                        cells = []
+                        for tc in tr.findall('./w:tc', ns):
+                            c_parts = [''.join(r.text or '' for r in p.findall('.//w:t', ns)).strip() for p in tc.findall('.//w:p', ns)]
+                            cells.append(' '.join(cp for cp in c_parts if cp))
+                        if any(c.strip() for c in cells):
+                            row_line = ' | '.join(cells)
+                            plain_lines.append(row_line)
+                            tag = section_tag or f'Tabela {tbl_idx} · linha {row_idx}'
+                            located_lines.append(f'[{tag}] {row_line}')
+                else:
+                    _walk_container(child, section_tag=section_tag)
+
         doc_xml = z.read('word/document.xml').decode('utf-8', errors='ignore')
-        # Namespace WordprocessingML
-        ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
         tree = ET.fromstring(doc_xml)
-        paragraphs = []
-        for p in tree.findall('.//w:p', ns):
-            texts = [r.text or '' for r in p.findall('.//w:t', ns)]
-            para_text = ''.join(texts).strip()
-            if para_text:
-                paragraphs.append(para_text)
-        return '\n'.join(paragraphs)
+        body = tree.find('w:body', ns)
+        _walk_container(body if body is not None else tree)
+
+        hf_names = sorted(n for n in z.namelist() if re.fullmatch(r'word/(?:header|footer)\d+\.xml', n))
+        for hf_name in hf_names:
+            try:
+                hf_xml = z.read(hf_name).decode('utf-8', errors='ignore')
+                hf_tree = ET.fromstring(hf_xml)
+                _walk_container(hf_tree, section_tag=f'Cabeçalho/Rodapé {os.path.basename(hf_name)}')
+            except Exception:
+                continue
+
+    return plain_lines, located_lines
+
+
+def extract_docx_text(fpath: str) -> str:
+    """Extrai texto de .docx preservando estrutura de parágrafos, tabelas e cabeçalhos/rodapés."""
+    try:
+        plain_lines, _ = _extract_docx_lines(fpath)
+        return '\n'.join(plain_lines)
     except Exception:
         # Fallback: strip all XML tags
         try:
-            z = zipfile.ZipFile(fpath)
-            doc_xml = z.read('word/document.xml').decode('utf-8', errors='ignore')
+            with zipfile.ZipFile(fpath) as z:
+                doc_xml = z.read('word/document.xml').decode('utf-8', errors='ignore')
             return re.sub(r'<[^>]+>', ' ', doc_xml)
         except Exception:
             return ''
@@ -220,21 +331,13 @@ def extract_xlsx_data(fpath: str) -> dict:
 
 
 def extract_csv_text(fpath: str) -> str:
-    """Lê CSV como texto."""
-    try:
-        with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-            return f.read(200000)
-    except Exception:
-        return ''
+    """Lê CSV como texto com fallback de codificação para cp1252/latin-1."""
+    return _read_text_with_fallback(fpath, max_chars=200000)
 
 
 def extract_text_file(fpath: str) -> str:
-    """Lê .md, .txt, .json, .yaml como texto."""
-    try:
-        with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-            return f.read(200000)
-    except Exception:
-        return ''
+    """Lê .md, .txt, .json, .yaml como texto com fallback de codificação."""
+    return _read_text_with_fallback(fpath, max_chars=200000)
 
 
 def get_file_text(fpath: str) -> str:
@@ -352,11 +455,7 @@ def extract_text_from_file(fpath: str) -> str:
     elif ext == '.pdf':
         text = extract_pdf_text(fpath)
     elif ext in ('.txt', '.md', '.json', '.yaml', '.yml', '.svg', '.drawio'):
-        try:
-            with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                text = f.read()
-        except Exception:
-            pass
+        text = _read_text_with_fallback(fpath)
     elif ext == '.csv':
         text = extract_csv_text(fpath)
     elif ext in ('.xlsx', '.xls'):
@@ -366,6 +465,20 @@ def extract_text_from_file(fpath: str) -> str:
             for sheet, rows in sheets.items()
         )
     return text
+
+
+def _line_snippet(text: str, pos: int, limit: int = 360) -> str:
+    """Extrai trecho literal de uma única linha ao redor da posição informada."""
+    line_start = text.rfind('\n', 0, pos) + 1
+    line_end = text.find('\n', pos)
+    if line_end == -1:
+        line_end = len(text)
+    line = re.sub(r'\s+', ' ', text[line_start:line_end]).strip()
+    if len(line) <= limit:
+        return line
+    rel_pos = max(0, pos - line_start)
+    start = max(0, rel_pos - 100)
+    return line[start:start + limit].strip()
 
 
 def analyze_document_structure(fpath: str) -> list:
@@ -378,39 +491,53 @@ def analyze_document_structure(fpath: str) -> list:
     findings = []
 
     # Pilar 6: Marcadores de Rascunho / Campos em Branco
-    draft_matches = re.findall(r'\[(Preenchido por|Inserir|A definir|TBD|XXX|\?\?\?)[^\]]*\]', text, re.IGNORECASE)
-    if "Preenchido por Compras" in text or draft_matches:
+    m_draft = re.search(r'\[(?:Preenchido por|Inserir|A definir|TBD|XXX|\?\?\?)[^\]]*\]|Preenchido por Compras', text, re.IGNORECASE)
+    if m_draft:
+        line_no = text[:m_draft.start()].count('\n') + 1
+        quote = _line_snippet(text, m_draft.start())
+        loc_str = f'Linha {line_no}'
         findings.append({
             'id': 'EDIT-001',
             'title': f'Campos de rascunho/template não preenchidos em {filename}',
             'doc_origem': filename,
-            'loc': 'Seções de Identificação / Cabeçalhos',
+            'loc': loc_str,
+            'localizacao_exata': loc_str,
             'cat': 'Integridade Redacional e Estrutural',
             'tipo': 'Errata/Estrutura',
-            'evid': 'E3 (Confirmado por confronto direto)',
+            'evid': 'E2 (Corroborado)',
+            'citacao': quote,
+            'evidencia_literal': quote,
             'crit': 'Média',
             'prio': 'P2',
             'fato': 'O documento contém marcações de rascunho/template não preenchidas (ex: "[Preenchido por Compras]" ou marcas de placeholder).',
             'impacto': 'Publicação de documento com marcas de rascunho prejudica a imagem institucional e dificulta a comunicação formal.',
             'tipo_solucao': 'De → Para (Minuta)',
-            'texto_atual': '[Preenchido por Compras / Rascunho]',
+            'texto_atual': m_draft.group(0),
             'texto_sugerido': 'Preencher formalmente todos os campos cadastrais antes da publicação.',
             'proprietario': 'Área Emissora do Documento',
-            'id_acao': 'ACT-EDIT-001'
+            'id_acao': 'ACT-EDIT-001',
+            'referencias': [{'titulo': 'FCA-ENG-001 — Pilar 6 (Marcadores de Rascunho)', 'url': '', 'nota': 'Marcador de template não preenchido na baseline.'}]
         })
 
     # Pilar 4: Erros de codificação / OCR (ex: An?lise, Especifica??o)
     encoding_bugs = re.findall(r'\b[A-Za-z]+\?[A-Za-z]+\b', text)
     if encoding_bugs:
-        sample_bugs = ', '.join(list(set(encoding_bugs))[:5])
+        m_enc = re.search(r'\b[A-Za-z]+\?[A-Za-z]+\b', text)
+        line_no = text[:m_enc.start()].count('\n') + 1
+        quote = _line_snippet(text, m_enc.start())
+        loc_str = f'Linha {line_no}'
+        sample_bugs = ', '.join(list(dict.fromkeys(encoding_bugs))[:5])
         findings.append({
             'id': 'EDIT-002',
             'title': f'Artefatos de conversão de codificação/OCR em palavras de {filename}',
             'doc_origem': filename,
-            'loc': 'Corpo do Texto',
+            'loc': loc_str,
+            'localizacao_exata': loc_str,
             'cat': 'Integridade Redacional e Estrutural',
             'tipo': 'Errata/Estrutura',
-            'evid': 'E3 (Confirmado por confronto direto)',
+            'evid': 'E2 (Corroborado)',
+            'citacao': quote,
+            'evidencia_literal': quote,
             'crit': 'Baixa',
             'prio': 'P3',
             'fato': f'Foram identificadas palavras com erro de caracter acentuado (ex: {sample_bugs}).',
@@ -419,21 +546,30 @@ def analyze_document_structure(fpath: str) -> list:
             'texto_atual': f'Exemplo de termos com erro: {sample_bugs}',
             'texto_sugerido': 'Corrigir a codificação de caracteres para UTF-8 sem perdas de acentuação.',
             'proprietario': 'Revisão Editorial / Autor',
-            'id_acao': 'ACT-EDIT-002'
+            'id_acao': 'ACT-EDIT-002',
+            'referencias': [{'titulo': 'FCA-ENG-001 — Pilar 4 (Codificação UTF-8 e PT-BR)', 'url': '', 'nota': 'Artefato de codificação/OCR detectado no texto.'}]
         })
 
     # Pilar 4: Vocabulário PT-PT proibido pela regra 8 do AGENTS.md
-    pt_pt_terms = re.findall(r'\b(ficheiro|ficheiros|equipa|equipas|ecrã|ecrãs|facto|factos|planeamento)\b', text, re.IGNORECASE)
+    pt_pt_rx = r'\b(ficheiro|ficheiros|equipa|equipas|ecrã|ecrãs|facto|factos|planeamento)\b'
+    pt_pt_terms = re.findall(pt_pt_rx, text, re.IGNORECASE)
     if pt_pt_terms:
-        unique_terms = ', '.join(list(set([t.lower() for t in pt_pt_terms]))[:5])
+        m_pt = re.search(pt_pt_rx, text, re.IGNORECASE)
+        line_no = text[:m_pt.start()].count('\n') + 1
+        quote = _line_snippet(text, m_pt.start())
+        loc_str = f'Linha {line_no}'
+        unique_terms = ', '.join(list(dict.fromkeys(t.lower() for t in pt_pt_terms))[:5])
         findings.append({
             'id': 'EDIT-003',
             'title': f'Uso de vocabulário de Português de Portugal (PT-PT) em {filename}',
             'doc_origem': filename,
-            'loc': 'Texto Integral',
+            'loc': loc_str,
+            'localizacao_exata': loc_str,
             'cat': 'Integridade Redacional e Estrutural',
             'tipo': 'Errata/Estrutura',
-            'evid': 'E3 (Confirmado por confronto direto)',
+            'evid': 'E2 (Corroborado)',
+            'citacao': quote,
+            'evidencia_literal': quote,
             'crit': 'Baixa',
             'prio': 'P3',
             'fato': f'O documento utiliza termos do Português de Portugal (ex: {unique_terms}), contrariando a norma FCA-ENG-001.',
@@ -442,21 +578,30 @@ def analyze_document_structure(fpath: str) -> list:
             'texto_atual': f'Termos identificados: {unique_terms}',
             'texto_sugerido': 'Substituir por equivalente PT-BR: "arquivo", "equipe", "tela", "fato", "planejamento".',
             'proprietario': 'Revisão Editorial',
-            'id_acao': 'ACT-EDIT-003'
+            'id_acao': 'ACT-EDIT-003',
+            'referencias': [{'titulo': 'FCA-ENG-001 — Diretriz 8 (PT-BR obrigatório)', 'url': '', 'nota': 'Vocabulário PT-PT proscrito pela norma corporativa.'}]
         })
 
     # Pilar 7 (RFC 2119 / RFC 8174): Termos Fracos e Ambíguos em Requisitos Mandatórios
-    weak_terms = re.findall(r'\b(em princípio|desejável|preferencialmente|quando conveniente|na medida do possível|se conveniente|se possível)\b', text, re.IGNORECASE)
+    weak_rx = r'\b(em princípio|desejável|preferencialmente|quando conveniente|na medida do possível|se conveniente|se possível)\b'
+    weak_terms = re.findall(weak_rx, text, re.IGNORECASE)
     if weak_terms:
-        unique_weak = ', '.join(list(set([w.lower() for w in weak_terms]))[:5])
+        m_weak = re.search(weak_rx, text, re.IGNORECASE)
+        line_no = text[:m_weak.start()].count('\n') + 1
+        quote = _line_snippet(text, m_weak.start())
+        loc_str = f'Linha {line_no}'
+        unique_weak = ', '.join(list(dict.fromkeys(w.lower() for w in weak_terms))[:5])
         findings.append({
             'id': 'EDIT-004',
             'title': f'Termos fracos e ambíguos em cláusulas normativas de {filename} (RFC 2119 / RFC 8174)',
             'doc_origem': filename,
-            'loc': 'Requisitos Técnicos / Normativos',
+            'loc': loc_str,
+            'localizacao_exata': loc_str,
             'cat': 'Conformidade RFC 2119/8174',
             'tipo': 'Ambiguidade',
-            'evid': 'E3 (Confirmado por confronto direto)',
+            'evid': 'E2 (Corroborado)',
+            'citacao': quote,
+            'evidencia_literal': quote,
             'crit': 'Média',
             'prio': 'P2',
             'fato': f'O documento utiliza linguagem de descompromisso ou ambígua em especificações técnicas (ex: "{unique_weak}").',
@@ -465,21 +610,30 @@ def analyze_document_structure(fpath: str) -> list:
             'texto_atual': f'Expressões ambíguas encontradas: {unique_weak}',
             'texto_sugerido': 'Substituir por verbos estritos da RFC 2119 em caixa alta: DEVE (mandatório), RECOMENDA-SE (opção justificada) ou PODE (opcional).',
             'proprietario': 'Engenharia de Requisitos / Jurídico',
-            'id_acao': 'ACT-EDIT-004'
+            'id_acao': 'ACT-EDIT-004',
+            'referencias': [{'titulo': 'IETF RFC 2119 / RFC 8174', 'url': '', 'nota': 'Uso de expressões ambíguas em vez de verbos normativos estritos.'}]
         })
 
     # Pilar 7 (ISO/IEC/IEEE 29148): Requisitos Subjetivos e Não Mensuráveis
-    subjective_terms = re.findall(r'\b(altíssima velocidade|sistema rápido|alta performance|interface amigável|super seguro|resposta instantânea)\b', text, re.IGNORECASE)
+    subj_rx = r'\b(altíssima velocidade|sistema rápido|alta performance|interface amigável|super seguro|resposta instantânea)\b'
+    subjective_terms = re.findall(subj_rx, text, re.IGNORECASE)
     if subjective_terms:
-        unique_subj = ', '.join(list(set([s.lower() for s in subjective_terms]))[:5])
+        m_subj = re.search(subj_rx, text, re.IGNORECASE)
+        line_no = text[:m_subj.start()].count('\n') + 1
+        quote = _line_snippet(text, m_subj.start())
+        loc_str = f'Linha {line_no}'
+        unique_subj = ', '.join(list(dict.fromkeys(s.lower() for s in subjective_terms))[:5])
         findings.append({
             'id': 'EDIT-005',
             'title': f'Requisitos subjetivos e não mensuráveis em {filename} (ISO/IEC/IEEE 29148)',
             'doc_origem': filename,
-            'loc': 'Especificações Técnicas',
+            'loc': loc_str,
+            'localizacao_exata': loc_str,
             'cat': 'Engenharia de Requisitos (ISO 29148)',
             'tipo': 'Ambiguidade',
             'evid': 'E2 (Corroborado)',
+            'citacao': quote,
+            'evidencia_literal': quote,
             'crit': 'Média',
             'prio': 'P2',
             'fato': f'O documento contém adjetivos subjetivos sem métricas numéricas objetivas de teste (ex: "{unique_subj}").',
@@ -488,20 +642,27 @@ def analyze_document_structure(fpath: str) -> list:
             'texto_atual': f'Adjetivos subjetivos: {unique_subj}',
             'texto_sugerido': 'Especificar KPI numérico quantitativo de aceite (ex: latência < 50ms, vazão > 10 Gbps, SLA 99,99%).',
             'proprietario': 'Comissão Técnica de Engenharia',
-            'id_acao': 'ACT-EDIT-005'
+            'id_acao': 'ACT-EDIT-005',
+            'referencias': [{'titulo': 'ISO/IEC/IEEE 29148', 'url': '', 'nota': 'Critério de verificabilidade e testabilidade quantitativa de requisitos.'}]
         })
 
     # Pilar 7 (ISO 8601): SLAs e Janelas de Manutenção sem Fuso Horário
-    sla_no_tz = re.findall(r'\b(24x7|horário comercial|janela de manutenção)\b', text, re.IGNORECASE)
-    if sla_no_tz and not re.search(r'\b(UTC|BRT|UTC-3)\b', text):
+    m_tz = re.search(r'\b(24x7|horário comercial|janela de manutenção)\b', text, re.IGNORECASE)
+    if m_tz and not re.search(r'\b(UTC|BRT|UTC-3)\b', text):
+        line_no = text[:m_tz.start()].count('\n') + 1
+        quote = _line_snippet(text, m_tz.start())
+        loc_str = f'Linha {line_no}'
         findings.append({
             'id': 'EDIT-006',
             'title': f'Janelas de SLA / Manutenção sem indicação de fuso horário em {filename} (ISO 8601)',
             'doc_origem': filename,
-            'loc': 'Cláusulas de SLA e Suporte',
+            'loc': loc_str,
+            'localizacao_exata': loc_str,
             'cat': 'Integridade Redacional e Estrutural',
             'tipo': 'Lacuna',
-            'evid': 'E3 (Confirmado por confronto direto)',
+            'evid': 'E2 (Corroborado)',
+            'citacao': quote,
+            'evidencia_literal': quote,
             'crit': 'Baixa',
             'prio': 'P3',
             'fato': 'O documento referencia janelas de atendimento/SLA ("24x7" ou "horário comercial") sem especificar o fuso horário oficial (BRT / UTC-3).',
@@ -510,31 +671,41 @@ def analyze_document_structure(fpath: str) -> list:
             'texto_atual': 'Período sem fuso horário explicitado.',
             'texto_sugerido': 'Explicitar o fuso horário oficial em todos os prazos: ex. "24x7x365 no fuso horário de Brasília (BRT / UTC-3)".',
             'proprietario': 'Gestão de Operações / Contratos',
-            'id_acao': 'ACT-EDIT-006'
+            'id_acao': 'ACT-EDIT-006',
+            'referencias': [{'titulo': 'ISO 8601', 'url': '', 'nota': 'Especificação explícita de fuso horário em janelas operacionais e SLAs.'}]
         })
 
     # Pilar 1: Sequência Numeral e Hierarquia (Saltos de numeração em títulos/seções)
     sec_numbers = []
-    for line in text.splitlines():
+    for line_no, line in enumerate(text.splitlines(), 1):
         m_sec = re.match(r'^\s*(?:#+\s*)?(\d+)\.(\d+)(?!\.\d)\s+[A-ZÁÉÍÓÚÂÊÔÃÕÇ]', line)
         if m_sec:
-            sec_numbers.append((int(m_sec.group(1)), int(m_sec.group(2)), line.strip()[:60]))
+            sec_numbers.append((int(m_sec.group(1)), int(m_sec.group(2)), line.strip(), line_no))
     jumps = []
+    first_jump_line = 1
+    first_jump_quote = ''
     for idx in range(1, len(sec_numbers)):
-        prev_maj, prev_min, prev_txt = sec_numbers[idx - 1]
-        cur_maj, cur_min, cur_txt = sec_numbers[idx]
+        prev_maj, prev_min, _, _ = sec_numbers[idx - 1]
+        cur_maj, cur_min, cur_txt, cur_line_no = sec_numbers[idx]
         if cur_maj == prev_maj and cur_min > prev_min + 1:
             jumps.append(f"{prev_maj}.{prev_min} → {cur_maj}.{cur_min}")
+            if not first_jump_quote:
+                first_jump_line = cur_line_no
+                first_jump_quote = cur_txt[:360]
     if jumps:
         sample_jumps = ', '.join(jumps[:3])
+        loc_str = f'Linha {first_jump_line} ({sample_jumps})'
         findings.append({
             'id': 'EDIT-007',
             'title': f'Quebra de sequência numeral de seções em {filename}',
             'doc_origem': filename,
-            'loc': f'Estrutura de Seções ({sample_jumps})',
+            'loc': loc_str,
+            'localizacao_exata': loc_str,
             'cat': 'Integridade Redacional e Estrutural',
             'tipo': 'Errata/Estrutura',
-            'evid': 'E3 (Confirmado por confronto direto)',
+            'evid': 'E2 (Corroborado)',
+            'citacao': first_jump_quote,
+            'evidencia_literal': first_jump_quote,
             'crit': 'Baixa',
             'prio': 'P3',
             'fato': f'Foram identificados saltos na numeração sequencial de subseções ({sample_jumps}).',
@@ -543,29 +714,38 @@ def analyze_document_structure(fpath: str) -> list:
             'texto_atual': f'Sequência com salto: {sample_jumps}',
             'texto_sugerido': 'Renumerar sequencialmente todas as seções e atualizar o sumário executivo.',
             'proprietario': 'Revisão Editorial / Autor',
-            'id_acao': 'ACT-EDIT-007'
+            'id_acao': 'ACT-EDIT-007',
+            'referencias': [{'titulo': 'FCA-ENG-001 — Pilar 1 (Sequência Numeral)', 'url': '', 'nota': 'Salto detectado na numeração sequencial de seções.'}]
         })
 
     # Pilar 3: Referências Cruzadas Órfãs (menção "ver Tabela X" / "conforme Figura Y" sem legenda correspondente)
-    ref_calls = re.findall(r'\b(?:ver|conforme|vide|na|da)\s+(Tabela|Figura|Quadro)\s+(\d+)\b', text, re.IGNORECASE)
     orphan_refs = []
-    for ref_kind, ref_num in ref_calls:
+    first_orphan_pos = None
+    for m_ref in re.finditer(r'\b(?:ver|conforme|vide|na|da)\s+(Tabela|Figura|Quadro)\s+(\d+)\b', text, re.IGNORECASE):
+        ref_kind, ref_num = m_ref.group(1), m_ref.group(2)
         label_pat = re.compile(rf'\b{re.escape(ref_kind)}\s+{re.escape(ref_num)}\b', re.IGNORECASE)
-        occurrences = len(label_pat.findall(text))
-        if occurrences <= 1:
+        if len(label_pat.findall(text)) <= 1:
             tag = f"{ref_kind.capitalize()} {ref_num}"
             if tag not in orphan_refs:
                 orphan_refs.append(tag)
-    if orphan_refs:
+                if first_orphan_pos is None:
+                    first_orphan_pos = m_ref.start()
+    if orphan_refs and first_orphan_pos is not None:
         sample_orphans = ', '.join(orphan_refs[:4])
+        line_no = text[:first_orphan_pos].count('\n') + 1
+        quote = _line_snippet(text, first_orphan_pos)
+        loc_str = f'Linha {line_no}'
         findings.append({
             'id': 'EDIT-008',
             'title': f'Referências cruzadas órfãs a elementos visuais/tabulares em {filename}',
             'doc_origem': filename,
-            'loc': 'Referências Internas do Corpo do Texto',
+            'loc': loc_str,
+            'localizacao_exata': loc_str,
             'cat': 'Integridade Redacional e Estrutural',
             'tipo': 'Errata/Estrutura',
             'evid': 'E2 (Corroborado)',
+            'citacao': quote,
+            'evidencia_literal': quote,
             'crit': 'Média',
             'prio': 'P2',
             'fato': f'O texto cita elementos ({sample_orphans}) que ocorrem apenas na chamada referencial, sem legenda ou título correspondente no corpo do documento.',
@@ -574,19 +754,28 @@ def analyze_document_structure(fpath: str) -> list:
             'texto_atual': f'Referências sem destino localizado: {sample_orphans}',
             'texto_sugerido': 'Inserir o elemento ausente com a respectiva legenda numerada ou corrigir o número referenciado.',
             'proprietario': 'Autor Técnico / Revisão Editorial',
-            'id_acao': 'ACT-EDIT-008'
+            'id_acao': 'ACT-EDIT-008',
+            'referencias': [{'titulo': 'FCA-ENG-001 — Pilar 3 (Referências Cruzadas)', 'url': '', 'nota': 'Chamada referencial sem legenda/tabela correspondente.'}]
         })
 
     # Pilar 7 (ISO 80000): Mistura ambígua de unidades de transmissão (Gbps vs GB/s)
-    if re.search(r'\b\d+\s*Gbps\b', text) and re.search(r'\b\d+\s*GB/s\b', text):
+    m_gbps = re.search(r'\b\d+\s*Gbps\b', text)
+    m_gbs = re.search(r'\b\d+\s*GB/s\b', text)
+    if m_gbps and m_gbs:
+        line_no = text[:m_gbps.start()].count('\n') + 1
+        quote = _line_snippet(text, m_gbps.start())
+        loc_str = f'Linha {line_no}'
         findings.append({
             'id': 'EDIT-009',
             'title': f'Mistura ambígua de unidades de taxa de transmissão (Gbps vs GB/s) em {filename} (ISO 80000)',
             'doc_origem': filename,
-            'loc': 'Especificações de Capacidade / Throughput',
+            'loc': loc_str,
+            'localizacao_exata': loc_str,
             'cat': 'Integridade Redacional e Estrutural',
             'tipo': 'Ambiguidade',
-            'evid': 'E3 (Confirmado por confronto direto)',
+            'evid': 'E2 (Corroborado)',
+            'citacao': quote,
+            'evidencia_literal': quote,
             'crit': 'Média',
             'prio': 'P2',
             'fato': 'O documento mistura no mesmo texto unidades em Gigabits por segundo (Gbps) e Gigabytes por segundo (GB/s), que diferem por fator de 8x.',
@@ -595,7 +784,8 @@ def analyze_document_structure(fpath: str) -> list:
             'texto_atual': 'Uso simultâneo de Gbps e GB/s.',
             'texto_sugerido': 'Padronizar taxas de rede em Gbps (bits/s) e taxas de disco/I/O em GB/s (Bytes/s) conforme ISO 80000.',
             'proprietario': 'Engenharia de Sistemas / Redes',
-            'id_acao': 'ACT-EDIT-009'
+            'id_acao': 'ACT-EDIT-009',
+            'referencias': [{'titulo': 'ISO 80000 / SI', 'url': '', 'nota': 'Coexistência de unidades em bits/s e Bytes/s no mesmo documento.'}]
         })
 
     return findings
@@ -603,8 +793,8 @@ def analyze_document_structure(fpath: str) -> list:
 
 def analyze_document_domain_technical(fpath: str, skills_ativas: list = None) -> list:
     """
-    Executa a auditoria técnica exaustiva de domínio com base nas skills ativas no lote.
-    Mapeia fatos, lacunas, inconsistências e riscos específicos por domínio.
+    Executa controles complementares de domínio com base nas skills ativas no lote,
+    evitando sobreposição com specialized_controls.py e advanced_specialized_controls.py.
     """
     filename = os.path.basename(fpath)
     text = extract_text_from_file(fpath)
@@ -617,37 +807,22 @@ def analyze_document_domain_technical(fpath: str, skills_ativas: list = None) ->
 
     # --- SKILL: analisar-carrier (Carrier Telecom & DCN) ---
     if not skills or 'analisar-carrier' in skills:
-        # 1. Dark Fiber & DWDM OSNR
-        if ('dwdm' in text_lower or 'óptica' in text_lower or 'optica' in text_lower or 'fibra' in text_lower) and not re.search(r'\b(osnr|span budget|otdr|db/km)\b', text_lower):
-            findings.append({
-                'id': 'CARRIER-001',
-                'title': f'Parâmetros ópticos de DWDM / Fibra Apagada (OSNR, Span Budget, dB/km) omissos em {filename}',
-                'doc_origem': filename,
-                'loc': 'Especificação de Transporte / Camada Óptica',
-                'cat': 'Carrier Telecom & DCN',
-                'tipo': 'Lacuna',
-                'evid': 'E3 (Confirmado por confronto direto)',
-                'crit': 'Alta',
-                'prio': 'P1',
-                'fato': 'O documento referencia enlace de transporte óptico/DWDM sem especificar a margem mínima de OSNR, a atenuação máxima por km (dB/km) ou a exigência de laudos de OTDR.',
-                'impacto': 'Impossibilidade de homologar a viabilidade física e a margem de degradação da camada óptica do backbone.',
-                'tipo_solucao': 'Plano de Ação Estruturado',
-                'texto_atual': 'Especificação óptica sem parâmetros de OSNR / dB/km.',
-                'texto_sugerido': 'Exigir tabela de span budget, margem de OSNR mínima (≥ 18 dB) e laudos de ensaio OTDR para aceite da fibra.',
-                'proprietario': 'Engenharia de Transporte / Óptica',
-                'id_acao': 'ACT-CARRIER-001'
-            })
-
-        # 2. IP Core Convergence & BFD
-        if ('bgp' in text_lower or 'mpls' in text_lower or 'isis' in text_lower or 'srv6' in text_lower) and not re.search(r'\b(bfd|frr|fast reroute)\b', text_lower):
+        m_car2 = re.search(r'\b(bgp|mpls|isis|srv6)\b', text, re.IGNORECASE)
+        if m_car2 and not re.search(r'\b(bfd|frr|fast reroute)\b', text_lower):
+            line_no = text[:m_car2.start()].count('\n') + 1
+            quote = _line_snippet(text, m_car2.start())
+            loc_str = f'Linha {line_no}'
             findings.append({
                 'id': 'CARRIER-002',
                 'title': f'Mecanismos de convergência ultra-rápida (BFD e SR-FRR < 50ms) não especificados no Core IP em {filename}',
                 'doc_origem': filename,
-                'loc': 'Arquitetura de Roteamento / Core IP',
+                'loc': loc_str,
+                'localizacao_exata': loc_str,
                 'cat': 'Carrier Telecom & DCN',
                 'tipo': 'Inconsistência',
-                'evid': 'E3 (Confirmado por confronto direto)',
+                'evid': 'E2 (Corroborado)',
+                'citacao': quote,
+                'evidencia_literal': quote,
                 'crit': 'Alta',
                 'prio': 'P1',
                 'fato': 'O documento descreve protocolos de roteamento de backbone (BGP/IS-IS/SRv6) sem exigir explicitamente a ativação de BFD (Bidirectional Forwarding Detection) e Fast Reroute (FRR sub-50ms).',
@@ -656,62 +831,28 @@ def analyze_document_domain_technical(fpath: str, skills_ativas: list = None) ->
                 'texto_atual': 'Roteamento IP sem especificação de BFD / FRR.',
                 'texto_sugerido': 'DEVE ser ativado BFD com timer de detecção ≤ 50ms e SR-FRR Topology-Independent LFA (TI-LFA) em todas as adjacências de Core.',
                 'proprietario': 'Engenharia de Roteamento IP',
-                'id_acao': 'ACT-CARRIER-002'
-            })
-
-        # 3. BGP Route Reflectors & Peering RPKI
-        if ('peering' in text_lower or 'ixp' in text_lower or 'ptt' in text_lower or 'route reflector' in text_lower) and not re.search(r'\b(rpki|roa|flowspec|blackhole)\b', text_lower):
-            findings.append({
-                'id': 'CARRIER-003',
-                'title': f'Políticas de proteção de Peering e BGP (RPKI, max-prefix, Flowspec) omissas em {filename}',
-                'doc_origem': filename,
-                'loc': 'BGP & Pontos de Troca de Tráfego (IXP/PNI)',
-                'cat': 'Carrier Telecom & DCN',
-                'tipo': 'Lacuna',
-                'evid': 'E3 (Confirmado por confronto direto)',
-                'crit': 'Crítica',
-                'prio': 'P0',
-                'fato': 'A arquitetura BGP de Peering/IXP não especifica a validação compulsória de RPKI (ROA Validation), limites de prefixos recebidos (max-prefix) ou mecanismos anti-DDoS (BGP Flowspec/RTBH).',
-                'impacto': 'Risco de sequestro de rotas BGP (BGP Route Leak/Hijacking) e instabilidade por estouro de tabela de roteamento no backbone.',
-                'tipo_solucao': 'De → Para (Minuta)',
-                'texto_atual': 'Conexão BGP de Peering sem política de segurança RPKI.',
-                'texto_sugerido': 'Ativar RPKI ROA Validation com política Invalid Drop, max-prefix e suporte a BGP Flowspec (RFC 8955).',
-                'proprietario': 'Segurança de Rede / Roteamento BGP',
-                'id_acao': 'ACT-CARRIER-003'
-            })
-
-        # 4. DCN Fabric, Telemetria & PAM Break-Glass
-        if ('dcn' in text_lower or 'spine' in text_lower or 'leaf' in text_lower or 'evpn' in text_lower) and not re.search(r'\b(gnmi|grpc|pam|break-glass|oob)\b', text_lower):
-            findings.append({
-                'id': 'CARRIER-004',
-                'title': f'Instrumentação DCN (Streaming Telemetry gNMI) e Gestão PAM Break-Glass não especificadas em {filename}',
-                'doc_origem': filename,
-                'loc': 'Infraestrutura DCN & Observabilidade',
-                'cat': 'Carrier Telecom & DCN',
-                'tipo': 'Lacuna',
-                'evid': 'E2 (Corroborado)',
-                'crit': 'Média',
-                'prio': 'P2',
-                'fato': 'A rede DCN (Spine-Leaf / Out-Of-Band) omite a exigência de Streaming Telemetry (gNMI/gRPC/OpenConfig) e a política de custódia/rotação compulsória de credenciais locais (Break-Glass PAM).',
-                'impacto': 'Monitoramento legado por SNMP polling perde eventos transientes e o uso de senhas locais sem rotação compromete a governança OOB.',
-                'tipo_solucao': 'Plano de Ação Estruturado',
-                'texto_atual': 'Gestão DCN por SNMP polling sem fluxo PAM Break-Glass.',
-                'texto_sugerido': 'Implementar Streaming Telemetry via gNMI/gRPC e selagem de senhas locais em cofre PAM com rotação automática em 24h após acionamento.',
-                'proprietario': 'Gerência de DCN & Segurança da Informação',
-                'id_acao': 'ACT-CARRIER-004'
+                'id_acao': 'ACT-CARRIER-002',
+                'referencias': [{'titulo': 'IETF RFC 5880 (BFD) / TI-LFA', 'url': '', 'nota': 'Convergência rápida em roteamento IP/MPLS de backbone.'}]
             })
 
     # --- SKILL: analisar-rfp (Requests for Proposal / RFIs) ---
     if not skills or 'analisar-rfp' in skills:
-        if ('sla' in text_lower or 'penalidade' in text_lower) and not re.search(r'\b(raci|matriz de responsabilidades)\b', text_lower):
+        m_rfp1 = re.search(r'\b(sla|penalidade)\b', text, re.IGNORECASE)
+        if m_rfp1 and not re.search(r'\b(raci|matriz de responsabilidades)\b', text_lower):
+            line_no = text[:m_rfp1.start()].count('\n') + 1
+            quote = _line_snippet(text, m_rfp1.start())
+            loc_str = f'Linha {line_no}'
             findings.append({
                 'id': 'RFP-001',
                 'title': f'Ausência de Matriz RACI explicita para obrigações contratuais e SLAs em {filename}',
                 'doc_origem': filename,
-                'loc': 'Cláusulas de SLA e Responsabilidades',
+                'loc': loc_str,
+                'localizacao_exata': loc_str,
                 'cat': 'Requests for Proposal (RFP)',
                 'tipo': 'Lacuna',
-                'evid': 'E3 (Confirmado por confronto direto)',
+                'evid': 'E2 (Corroborado)',
+                'citacao': quote,
+                'evidencia_literal': quote,
                 'crit': 'Alta',
                 'prio': 'P1',
                 'fato': 'O documento estabelece metas de SLA e penalidades mas não define formalmente a Matriz RACI (Responsible, Accountable, Consulted, Informed) para cada evento operacional.',
@@ -720,20 +861,28 @@ def analyze_document_domain_technical(fpath: str, skills_ativas: list = None) ->
                 'texto_atual': 'Obrigações operacionais em voz passiva sem responsável atribuído.',
                 'texto_sugerido': 'Incluir anexo normativo com a Matriz RACI detalhando a responsabilidade da Contratada e da Contratante para cada SLA.',
                 'proprietario': 'Comissão Licitante / Gestão de Contratos',
-                'id_acao': 'ACT-RFP-001'
+                'id_acao': 'ACT-RFP-001',
+                'referencias': [{'titulo': 'FCA-ENG-001 / ITIL v4 — Matriz RACI', 'url': '', 'nota': 'Definição explícita de papéis e responsabilidades em SLAs.'}]
             })
 
     # --- SKILL: analisar-hld (High Level Design) ---
     if not skills or 'analisar-hld' in skills:
-        if ('cluster' in text_lower or 'redundância' in text_lower or 'ha' in text_lower) and not re.search(r'\b(quorum|split-brain|witness|fencing)\b', text_lower):
+        m_hld1 = re.search(r'\b(cluster|redundância|ha)\b', text, re.IGNORECASE)
+        if m_hld1 and not re.search(r'\b(quorum|split-brain|witness|fencing)\b', text_lower):
+            line_no = text[:m_hld1.start()].count('\n') + 1
+            quote = _line_snippet(text, m_hld1.start())
+            loc_str = f'Linha {line_no}'
             findings.append({
                 'id': 'HLD-001',
                 'title': f'Mecanismo de Quorum e proteção contra Split-Brain não especificado no cluster de {filename}',
                 'doc_origem': filename,
-                'loc': 'Arquitetura de Alta Disponibilidade (HA)',
+                'loc': loc_str,
+                'localizacao_exata': loc_str,
                 'cat': 'High Level Design (HLD)',
                 'tipo': 'Lacuna',
-                'evid': 'E3 (Confirmado por confronto direto)',
+                'evid': 'E2 (Corroborado)',
+                'citacao': quote,
+                'evidencia_literal': quote,
                 'crit': 'Alta',
                 'prio': 'P1',
                 'fato': 'O HLD prevê arquitetura em cluster de alta disponibilidade (HA) mas não detalha o mecanismo de Quorum, nó Witness ou protocolo de Fencing para prevenção de Split-Brain.',
@@ -742,51 +891,8 @@ def analyze_document_domain_technical(fpath: str, skills_ativas: list = None) ->
                 'texto_atual': 'Cluster HA descrito sem especificação de Quorum / Witness.',
                 'texto_sugerido': 'Especificar o mecanismo de Quorum (ex: Majority Node Set ou Witness em 3º site) e a política de fencing automático.',
                 'proprietario': 'Arquitetura de Soluções / Datacenter',
-                'id_acao': 'ACT-HLD-001'
-            })
-
-    # --- SKILL: analisar-lgpd (Lei Geral de Proteção de Dados) ---
-    if not skills or 'analisar-lgpd' in skills:
-        if not re.search(r'\b(dpo|encarregado|anonimização|criptografia|base legal)\b', text_lower):
-            findings.append({
-                'id': 'LGPD-001',
-                'title': f'Ausência de controles formais de LGPD (Base Legal, DPO e Criptografia de PII) em {filename}',
-                'doc_origem': filename,
-                'loc': 'Tratamento de Dados e Privacidade',
-                'cat': 'Conformidade LGPD (Lei 13.709/2018)',
-                'tipo': 'Lacuna',
-                'evid': 'E2 (Corroborado)',
-                'crit': 'Alta',
-                'prio': 'P1',
-                'fato': 'O documento referencia o manuseio de dados de usuários sem formalizar a Base Legal (Art. 7º LGPD), a indicação do Encarregado (DPO) ou o padrão de criptografia em trânsito e repouso.',
-                'impacto': 'Risco de sanções administrativas da ANPD e incidentes de vazamento sem plano de resposta a titulares.',
-                'tipo_solucao': 'De → Para (Minuta)',
-                'texto_atual': 'Menção vaga ao tratamento de dados sem cláusulas LGPD.',
-                'texto_sugerido': 'Inserir Anexo de Proteção de Dados com requisitos de pseudonimização, criptografia AES-256 e canal do DPO.',
-                'proprietario': 'Jurídico / Privacidade & DPO',
-                'id_acao': 'ACT-LGPD-001'
-            })
-
-    # --- SKILL: analisar-datacenter (Datacenter Tier III/IV) ---
-    if not skills or 'analisar-datacenter' in skills:
-        if not re.search(r'\b(autonomia|gerador|ups|nobreak|2n|n\+1)\b', text_lower):
-            findings.append({
-                'id': 'DC-001',
-                'title': f'Especificação de redundância de energia/climatização (2N / N+1) e autonomia de UPS incompleta em {filename}',
-                'doc_origem': filename,
-                'loc': 'Infraestrutura Datacenter / Facilidades',
-                'cat': 'Infraestrutura Datacenter Tier III/IV',
-                'tipo': 'Lacuna',
-                'evid': 'E3 (Confirmado por confronto direto)',
-                'crit': 'Média',
-                'prio': 'P2',
-                'fato': 'O documento menciona ambiente de Datacenter sem detalhar a autonomia dos grupos geradores de combustível, a topologia de UPS (2N vs N+1) e o tempo de sustentação das baterias.',
-                'impacto': 'Vulnerabilidade a apagões na concessionária sem garantia de transição suave para os geradores.',
-                'tipo_solucao': 'Plano de Ação Estruturado',
-                'texto_atual': 'Especificação de Datacenter sem SLAs de facilidades.',
-                'texto_sugerido': 'Exigir certificação Tier III/IV (Uptime Institute) e autonomia mínima de 15 minutos em UPS 2N com geradores de partida em < 10s.',
-                'proprietario': 'Engenharia de Infraestrutura / Datacenter',
-                'id_acao': 'ACT-DC-001'
+                'id_acao': 'ACT-HLD-001',
+                'referencias': [{'titulo': 'FCA-ENG-001 — HLD / Alta Disponibilidade', 'url': '', 'nota': 'Prevenção de split-brain e controle de quorum em clusters HA.'}]
             })
 
     return findings
@@ -1371,6 +1477,7 @@ def tool_run_full_audit(lote_path: str = None) -> str:
                     extracted = extract_text_from_file(fpath)
                     documents.append({"name": clean_unicode_text(fname), "relative_path": relative_path,
                                       "ext": os.path.splitext(fname)[1].lower(), "text": extracted,
+                                      "sha256": h,
                                       "warning": "" if extracted.strip() else "Extracao sem texto retornado."})
 
         visual_inventory = visual_pipeline.extract_visual_inventory(
@@ -1424,6 +1531,11 @@ def tool_run_full_audit(lote_path: str = None) -> str:
         data = {
             'title': f"{lote_name.replace('_', ' ')}",
             'timestamp': ts,
+            'metadata': {
+                'lote': lote_name,
+                'versao_documento': 'v1.0',
+                'timestamp': ts,
+            },
             'baseline_files': baseline_files,
             'achados': all_findings,
             'lacunas': lacunas_list,
@@ -1594,14 +1706,14 @@ def tool_record_visual_analysis(timestamp: str, reviewed_asset_ids: list[str], f
             "proprietario": str(raw.get("proprietario", "Arquitetura / Engenharia")),
             "visual_asset_id": asset_id, "visual_file": asset.get("file"),
             "visual_sha256": asset.get("sha256"), "visual_page": page,
+            "texto_afirmado": str(raw.get("texto_afirmado", "")).strip(),
+            "diagrama_demonstrado": str(raw.get("diagrama_demonstrado", "")).strip(),
         }
         added.append(finding)
         known_ids.add(fid)
 
     all_findings = existing + added
     data["findings"] = all_findings
-    data["lacunas"] = [item for item in all_findings if "lacuna" in str(item.get("tipo", "")).lower()]
-    data["riscos"] = [item for item in all_findings if "risco" in str(item.get("tipo", "")).lower()]
     prior_reviewed = set(data.get("visual_analysis", {}).get("assets_reviewed", []))
     reviewed = sorted(prior_reviewed | set(reviewed_asset_ids))
     visual_status = "concluída" if set(assets).issubset(reviewed) else "parcial"
@@ -1617,29 +1729,7 @@ def tool_record_visual_analysis(timestamp: str, reviewed_asset_ids: list[str], f
     data["visual_inventory"] = inventory
     with open(inventory_path, "w", encoding="utf-8") as stream:
         json.dump(inventory, stream, ensure_ascii=False, indent=2)
-    with open(json_path, "w", encoding="utf-8") as stream:
-        json.dump(data, stream, ensure_ascii=False, indent=2)
-
-    import audit_engine
-    import html_compiler
-    kpis = data.setdefault("kpis", {})
-    kpis["total_achados"] = len(all_findings)
-    kpis["lacunas"] = len(data["lacunas"])
-    kpis["riscos"] = len(data["riscos"])
-    kpis["criticos"] = sum(item.get("criticidade", "").upper() == "CRÍTICA" for item in all_findings)
-    kpis["altos"] = sum(item.get("criticidade", "").upper() == "ALTA" for item in all_findings)
-    kpis["medios"] = sum(item.get("criticidade", "").upper() == "MÉDIA" for item in all_findings)
-    kpis["baixos"] = sum(item.get("criticidade", "").upper() in ("BAIXA", "INFORMATIVA") for item in all_findings)
-    raw_for_calc = [{"crit": item.get("criticidade", "Média"), "prio": item.get("prioridade", "P2")} for item in all_findings]
-    _, parecer_badge = audit_engine.calculate_parecer(raw_for_calc, data["lacunas"])
-    data["parecer_badge"] = parecer_badge
-    data["parecer"] = audit_engine.calculate_parecer(raw_for_calc, data["lacunas"])[0]
-    denom = kpis.get("iqd_denominador", max(len(data.get("baseline_files", [])) * 15, 30))
-    _, kpis["iqd"], kpis["iqd_denominador"] = audit_engine.calculate_iqd(raw_for_calc, denom)
-    with open(json_path, "w", encoding="utf-8") as stream:
-        json.dump(data, stream, ensure_ascii=False, indent=2)
-    html_compiler.compile_timestamp_html(timestamp, root_dir=root)
-    master = json.loads(tool_build_master_index())
+    master = _refresh_analysis_outputs(data, timestamp, root)
     return json.dumps({"status": "success", "timestamp": timestamp,
                        "visual_findings_added": len(added), "total_findings": len(all_findings),
                        "assets_reviewed": len(reviewed), "assets_total": len(assets),
@@ -1705,15 +1795,8 @@ def _extract_semantic_review_text(fpath: str) -> str:
             return ""
     if ext == ".docx":
         try:
-            with zipfile.ZipFile(fpath) as archive:
-                tree = ET.fromstring(archive.read("word/document.xml"))
-            ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
-            parts = []
-            for index, paragraph in enumerate(tree.findall(".//w:p", ns), 1):
-                paragraph_text = "".join(paragraph.itertext()).strip()
-                if paragraph_text:
-                    parts.append(f"[Parágrafo {index}] {paragraph_text}")
-            return "\n".join(parts)
+            _, located_lines = _extract_docx_lines(fpath)
+            return "\n".join(located_lines)
         except Exception:
             return ""
     if ext in (".xlsx", ".xls"):
@@ -1896,7 +1979,10 @@ def _refresh_analysis_outputs(data: dict, timestamp: str, root: str, build_maste
         question for question in questions
         if not (
             str(question.get("finding_id", "")) in unconfirmed_ids
-            and str(question.get("pergunta", "")).startswith("Favor esclarecer a seguinte pendência documental:")
+            and (
+                str(question.get("pergunta", "")).startswith("Favor esclarecer a seguinte pendência documental:")
+                or str(question.get("pergunta", "")).startswith("Favor esclarecer a seguinte pendência identificada no documento:")
+            )
         )
     ]
     question_signatures = {
@@ -1932,6 +2018,13 @@ def _refresh_analysis_outputs(data: dict, timestamp: str, root: str, build_maste
     kpis["altos"] = sum(str(item.get("criticidade", item.get("crit", ""))).upper() == "ALTA" for item in confirmed)
     kpis["medios"] = sum(str(item.get("criticidade", item.get("crit", ""))).upper() == "MÉDIA" for item in confirmed)
     kpis["baixos"] = sum(str(item.get("criticidade", item.get("crit", ""))).upper() in ("BAIXA", "INFORMATIVA") for item in confirmed)
+    kpis["estruturais"] = sum(
+        1 for item in confirmed
+        if any(
+            kw in (str(item.get("tipo", "")) + " " + str(item.get("categoria", item.get("cat", "")))).casefold()
+            for kw in ("estrutur", "redacional", "rfc 2119", "iso 29148")
+        )
+    )
     kpis["perguntas"] = len(questions)
     raw_for_calc = [{
         "crit": item.get("criticidade", item.get("crit", "Média")),
@@ -1989,8 +2082,12 @@ def _validate_adjudication_evidence(finding: dict, sources: list[dict], data: di
         provided_hash = str(source.get("sha256", "")).strip()
         if provided_hash and provided_hash.lower() != str(document.get("sha256", "")).lower():
             raise ValueError(f"Hash divergente na fonte de evidência #{index}: {path}.")
-        searchable_text = document.get("located_text") or document.get("text", "")
-        if not semantic_pipeline.quote_is_literal(searchable_text, quote):
+        located_text = document.get("located_text", "")
+        raw_text = document.get("text", "")
+        if not (
+            semantic_pipeline.quote_is_literal(located_text, quote)
+            or semantic_pipeline.quote_is_literal(raw_text, quote)
+        ):
             raise ValueError(f"Citação #{index} não localizada literalmente na baseline {path}.")
         signature = (path, semantic_pipeline.normalize_evidence_text(quote))
         if signature in signatures:
@@ -2421,11 +2518,13 @@ def tool_finalize_execution(timestamp: str, lote: str = None, version: str = Non
         detected_lote = parts[0]
         detected_version = version or "v1.0"
     else:
-        detected_lote = lote
+        detected_lote = lote or _extract_batch_name(timestamp, rel_path)
         detected_version = version or "v1.0"
 
     moved = []
     src_lote_dir = os.path.join(entrada_dir, detected_lote) if detected_lote else entrada_dir
+    if detected_lote and not os.path.isdir(src_lote_dir):
+        src_lote_dir = entrada_dir
 
     json_path = os.path.join(rel_dir, "dados_analise.json")
     baseline_filenames = []
@@ -2526,7 +2625,7 @@ def tool_create_review_revision(source_analysis: str, reason: str = "Ajuste e Ad
         lote = parts[0]
         version = data.get("metadata", {}).get("versao_documento", "v1.0")
     else:
-        lote = data.get("metadata", {}).get("lote", "lote_geral")
+        lote = data.get("metadata", {}).get("lote") or _extract_batch_name(source_analysis, src_relpath) or "lote_geral"
         version = data.get("metadata", {}).get("versao_documento", "v1.0")
 
     now = datetime.datetime.now()
@@ -2595,18 +2694,6 @@ def tool_create_review_revision(source_analysis: str, reason: str = "Ajuste e Ad
     }, indent=2, ensure_ascii=False)
 
 
-def sanitize_batch_isolation(text: str) -> str:
-    """Remove ou neutraliza citações cruzadas a outros lotes para garantir isolamento estrito por lote."""
-    if not isinstance(text, str) or not text:
-        return text
-    text = re.sub(r'Idêntico ao achado [A-Z]{2,5}-\d{3} do Lote \d+:?\s*', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'— mesmo padrão do Lote \d+', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'\(Lote \d+\)', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'\(Lotes \d+(?:,\s*\d+)*(?:\s*e\s*\d+)?\)', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'Lote \d+ \(([^)]+)\)', r'', text, flags=re.IGNORECASE)
-    text = re.sub(r'Lote \d+', 'especificação técnica', text, flags=re.IGNORECASE)
-    return text
-
 def tool_reconcile_versions(previous_timestamp: str, current_timestamp: str) -> str:
     """
     Compara duas rodadas/versões de análise (previous_timestamp vs current_timestamp),
@@ -2643,9 +2730,6 @@ def tool_reconcile_versions(previous_timestamp: str, current_timestamp: str) -> 
         "current_analysis": curr_relpath,
         "reconciliation": reconciliation,
     }, indent=2, ensure_ascii=False)
-
-
-from audit_pipeline import sanitize_batch_isolation, clean_unicode_text
 
 
 def tool_build_master_index() -> str:
@@ -3124,6 +3208,8 @@ TOOLS_MANIFEST = [
                 "impacto": {"type": "string"}, "solucao": {"type": "string"},
                 "trecho_textual_correlacionado": {"type": "string"},
                 "documento_textual_correlacionado": {"type": "string"},
+                "texto_afirmado": {"type": "string"},
+                "diagrama_demonstrado": {"type": "string"},
                 "proprietario": {"type": "string"}, "rule_id": {"type": "string"}
             }, "required": ["asset_id", "title", "observacao_visual", "fato"]}}
         }, "required": ["timestamp", "reviewed_asset_ids", "findings"]}
@@ -3181,7 +3267,11 @@ TOOLS_MANIFEST = [
                 "status": {"type": "string", "enum": ["pendente", "confirmado", "falso_positivo", "fora_de_escopo", "evidencia_insuficiente", "duplicado"]},
                 "rationale": {"type": "string"},
                 "related_finding_id": {"type": "string"},
-                "reviewer": {"type": "string"}
+                "reviewer": {"type": "string"},
+                "evidence_sources": {"type": "array", "items": {"type": "object", "properties": {
+                    "document_path": {"type": "string"}, "location": {"type": "string"},
+                    "quote": {"type": "string"}, "sha256": {"type": "string"}
+                }, "required": ["document_path", "location", "quote"]}}
             }, "required": ["finding_id", "status", "rationale"]}}
         }, "required": ["timestamp", "decisions"]}
     },
