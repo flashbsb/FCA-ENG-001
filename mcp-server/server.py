@@ -17,6 +17,7 @@ import datetime
 import re
 import subprocess
 import tempfile
+import unicodedata
 import xml.etree.ElementTree as ET
 from functools import lru_cache
 
@@ -76,7 +77,13 @@ def _is_valid_analysis_identifier(ident: str) -> bool:
     if not parts or len(parts) > 5:
         return False
     for p in parts:
-        if p in ('.', '..') or not re.fullmatch(r"[A-Za-z0-9_.-]+", p):
+        if (
+            not p
+            or p != p.strip()
+            or p in ('.', '..')
+            or any(ord(ch) < 32 for ch in p)
+            or not re.fullmatch(r"[\w .()\-]+", p, flags=re.UNICODE)
+        ):
             return False
     return True
 
@@ -1635,7 +1642,7 @@ def tool_check_environment() -> str:
     }, indent=2, ensure_ascii=False)
 
 
-def tool_profile_baseline(lote_path: str = None) -> str:
+def tool_profile_baseline(lote_path: str = None, primary_files: list[str] = None) -> str:
     """
     Triagem adaptativa do lote: detecta domínios semanticamente, mapeia checklists,
     recomenda skills e gera decisoes.yaml. Suporta subpastas aninhadas.
@@ -1675,7 +1682,7 @@ def tool_profile_baseline(lote_path: str = None) -> str:
         xlsx_files = []
         doc_files = []
 
-        has_embedded = False
+        raw_entries = []
         for dirpath, _, filenames in os.walk(lote_dir):
             for fname in sorted(filenames):
                 if fname.startswith('.') or fname in ('README.md', 'decisoes.yaml'):
@@ -1684,25 +1691,35 @@ def tool_profile_baseline(lote_path: str = None) -> str:
                 ext = os.path.splitext(fname)[1].lower()
                 rel = os.path.relpath(fpath, lote_dir)
                 size = os.path.getsize(fpath)
+                raw_entries.append((fpath, fname, rel, ext, size))
 
-                files_found.append({"name": fname, "path": rel, "ext": ext, "size_bytes": size})
-                filename_corpus += " " + fname.lower() + " " + rel.lower()
+        lote_name = os.path.basename(lote_dir)
+        roles_map = _classify_batch_document_roles(lote_name, [e[2] for e in raw_entries], primary_files=primary_files)
 
-                if ext in IMAGE_EXTS:
-                    images.append(fname)
-                    if ext in ('.vsdx', '.svg', '.drawio'):
-                        text_corpus += " " + get_file_text(fpath)[:100000].lower()
-                elif ext in XLSX_EXTS:
-                    xlsx_files.append(fname)
+        has_embedded = False
+        for fpath, fname, rel, ext, size in raw_entries:
+            role = roles_map.get(rel, "alvo_principal")
+            files_found.append({"name": fname, "path": rel, "ext": ext, "size_bytes": size, "role": role})
+            if role == "insumo_externo":
+                continue
+
+            filename_corpus += " " + fname.lower() + " " + rel.lower()
+
+            if ext in IMAGE_EXTS:
+                images.append(fname)
+                if ext in ('.vsdx', '.svg', '.drawio'):
                     text_corpus += " " + get_file_text(fpath)[:100000].lower()
-                    if ext == '.ods' and not has_embedded and has_embedded_images(fpath, ext):
-                        has_embedded = True
-                elif ext in DOC_EXTS:
-                    doc_files.append(fname)
-                    text = get_file_text(fpath)
-                    text_corpus += " " + text[:100000].lower()
-                    if not has_embedded and has_embedded_images(fpath, ext):
-                        has_embedded = True
+            elif ext in XLSX_EXTS:
+                xlsx_files.append(fname)
+                text_corpus += " " + get_file_text(fpath)[:100000].lower()
+                if ext == '.ods' and not has_embedded and has_embedded_images(fpath, ext):
+                    has_embedded = True
+            elif ext in DOC_EXTS:
+                doc_files.append(fname)
+                text = get_file_text(fpath)
+                text_corpus += " " + text[:100000].lower()
+                if not has_embedded and has_embedded_images(fpath, ext):
+                    has_embedded = True
 
         domains = detect_domains(text_corpus, filename_corpus)
         has_images = (len(images) > 0) or has_embedded
@@ -1717,7 +1734,7 @@ def tool_profile_baseline(lote_path: str = None) -> str:
 
         return {
             "lote_dir": lote_dir,
-            "lote_name": os.path.basename(lote_dir),
+            "lote_name": lote_name,
             "files": files_found,
             "docs_count": len(doc_files),
             "images_count": len(images),
@@ -1862,13 +1879,120 @@ description: {desc}
     }, indent=2, ensure_ascii=False)
 
 
-def tool_run_full_audit(lote_path: str = None) -> str:
+def _detect_primary_batch_version(lote_name: str, files_info: list[dict]) -> str:
+    """Detecta a versão do documento principal do lote pela sobreposição semântica com lote_name."""
+    normative_files = [
+        item for item in (files_info or [])
+        if str(item.get("role", "alvo_principal")) != "insumo_externo"
+    ]
+    primary_candidates = [
+        item for item in normative_files
+        if str(item.get("role", "")) == "alvo_principal"
+    ]
+    pool = primary_candidates or normative_files or (files_info or [])
+    lote_tokens = set(re.findall(r"[a-z0-9]+", (lote_name or "").casefold()))
+    best_score = (-1, -1)
+    best_version = "v1.0"
+    for item in sorted(pool, key=lambda x: str(x.get("name", ""))):
+        fname = str(item.get("name") or os.path.basename(str(item.get("path", "")))).strip()
+        if not fname:
+            continue
+        stem = os.path.splitext(fname)[0]
+        matches = re.findall(r"\b(v?\d+(?:\.\d+)+)\b", stem, flags=re.IGNORECASE)
+        if not matches:
+            continue
+        ver_raw = matches[-1].lstrip("vV")
+        ver_norm = f"v{ver_raw}"
+        file_tokens = set(re.findall(r"[a-z0-9]+", stem.casefold()))
+        overlap = len(lote_tokens & file_tokens)
+        score = (overlap, len(file_tokens))
+        if overlap > best_score[0] or (overlap == best_score[0] and best_score[0] >= 0 and score > best_score):
+            best_score = score
+            best_version = ver_norm
+    return best_version if best_score[0] >= 0 else "v1.0"
+
+
+def _classify_batch_document_roles(
+    lote_name: str,
+    file_paths: list[str],
+    primary_files: list[str] = None,
+) -> dict[str, str]:
+    """Classifica cada arquivo do lote como alvo_principal, apoio_cruzamento ou insumo_externo."""
+    stopwords = {
+        "01", "02", "03", "04", "05", "lote", "hld", "lld", "rfp", "rfi",
+        "et", "ntp", "eaf", "pdf", "docx", "xlsx",
+    }
+
+    def _ascii_lower(txt: str) -> str:
+        norm = unicodedata.normalize("NFKD", txt or "")
+        return "".join(ch for ch in norm if not unicodedata.combining(ch)).casefold()
+
+    def _sig_tokens(txt: str) -> set[str]:
+        tokens = re.findall(r"[a-z0-9]+", _ascii_lower(txt))
+        return {tok for tok in tokens if tok not in stopwords and not re.fullmatch(r"v?\d+", tok)}
+
+    roles: dict[str, str] = {}
+    normative_paths: list[str] = []
+    for orig_path in file_paths or []:
+        norm_p = str(orig_path).replace("\\", "/").lstrip("./")
+        norm_low = _ascii_lower(norm_p)
+        fname_low = _ascii_lower(os.path.basename(norm_p))
+        if (
+            norm_low.startswith("insumos_externos/")
+            or "/insumos_externos/" in norm_low
+            or "relatorio_analise" in fname_low
+            or "relatorio_complementar" in fname_low
+        ):
+            roles[orig_path] = "insumo_externo"
+        else:
+            normative_paths.append(orig_path)
+
+    if not normative_paths:
+        return roles
+
+    if primary_files:
+        explicit = {
+            str(p).strip().replace("\\", "/").lstrip("./").casefold()
+            for p in primary_files
+            if str(p).strip()
+        }
+        matched_any = False
+        for orig_path in normative_paths:
+            norm_p = str(orig_path).replace("\\", "/").lstrip("./").casefold()
+            base_p = os.path.basename(norm_p).casefold()
+            if norm_p in explicit or base_p in explicit:
+                roles[orig_path] = "alvo_principal"
+                matched_any = True
+            else:
+                roles[orig_path] = "apoio_cruzamento"
+        if matched_any:
+            return roles
+
+    lote_tokens = _sig_tokens(lote_name)
+    scored: list[tuple[str, int]] = []
+    for orig_path in normative_paths:
+        stem = os.path.splitext(os.path.basename(str(orig_path)))[0]
+        overlap = len(lote_tokens & _sig_tokens(stem))
+        scored.append((orig_path, overlap))
+
+    max_overlap = max((score for _, score in scored), default=0)
+    has_lower = any(score < max_overlap for _, score in scored)
+    if max_overlap > 0 and has_lower:
+        for orig_path, score in scored:
+            roles[orig_path] = "alvo_principal" if score == max_overlap else "apoio_cruzamento"
+    else:
+        for orig_path in normative_paths:
+            roles[orig_path] = "alvo_principal"
+    return roles
+
+
+def tool_run_full_audit(lote_path: str = None, primary_files: list[str] = None) -> str:
     """
     Executa o pipeline nativo e 100% dinâmico de auditoria RTI sobre os lotes em entrada/.
     Triagem adaptativa -> Extração ao vivo -> 7 Pilares -> Checklists -> JSON SSOT + HTML -> Central Master.
     """
     root = get_workspace_root()
-    raw_profile = tool_profile_baseline(lote_path)
+    raw_profile = tool_profile_baseline(lote_path, primary_files=primary_files)
     profile_res = json.loads(raw_profile)
 
     if profile_res.get("status") != "success":
@@ -1888,55 +2012,110 @@ def tool_run_full_audit(lote_path: str = None) -> str:
         lote_name = p["lote_name"]
 
         now_str = datetime.now().strftime('%Y%m%d_%H%M%S')
-        ts = f"{now_str}_{lote_name}"
+        ts_leaf = f"{now_str}_{lote_name}"
+        detected_version = _detect_primary_batch_version(lote_name, p.get("files", []))
+        ts = f"{lote_name}/{detected_version}/{ts_leaf}"
 
-        rel_dir = os.path.join(root, 'analise', ts, 'relatorios')
-        ent_dir = os.path.join(root, 'analise', ts, 'entrada')
+        rel_dir = os.path.join(root, 'analise', lote_name, detected_version, ts_leaf, 'relatorios')
+        ent_dir = os.path.join(root, 'analise', lote_name, detected_version, ts_leaf, 'entrada')
         os.makedirs(rel_dir, exist_ok=True)
         os.makedirs(ent_dir, exist_ok=True)
 
-        baseline_files = []
-        documents = []
+        raw_files = []
         if os.path.exists(lote_dir):
             for dirpath, _, filenames in os.walk(lote_dir):
                 for fname in sorted(filenames):
                     if fname.startswith('.') or fname in ('README.md', 'decisoes.yaml'):
                         continue
                     fpath = os.path.join(dirpath, fname)
-                    h = calculate_file_hash(fpath)
-                    sz = os.path.getsize(fpath)
                     relative_path = os.path.relpath(fpath, lote_dir)
-                    baseline_files.append({"name": clean_unicode_text(fname), "path": relative_path, "sha256": h, "size_bytes": sz})
-                    extracted = extract_text_from_file(fpath)
-                    documents.append({"name": clean_unicode_text(fname), "relative_path": relative_path,
-                                      "ext": os.path.splitext(fname)[1].lower(), "text": extracted,
-                                      "sha256": h,
-                                      "warning": "" if extracted.strip() else "Extracao sem texto retornado."})
+                    raw_files.append((fpath, fname, relative_path))
+
+        roles_map = _classify_batch_document_roles(
+            lote_name, [r[2] for r in raw_files], primary_files=primary_files
+        )
+
+        baseline_files = []
+        external_inputs = []
+        documents = []
+        fpath_by_rel = {}
+        for fpath, fname, relative_path in raw_files:
+            h = calculate_file_hash(fpath)
+            sz = os.path.getsize(fpath)
+            role = roles_map.get(relative_path, "alvo_principal")
+            if role == "insumo_externo":
+                external_inputs.append({
+                    "name": clean_unicode_text(fname),
+                    "path": relative_path,
+                    "sha256": h,
+                    "size_bytes": sz,
+                    "role": "insumo_externo",
+                })
+                continue
+            baseline_files.append({
+                "name": clean_unicode_text(fname),
+                "path": relative_path,
+                "sha256": h,
+                "size_bytes": sz,
+                "role": role,
+            })
+            extracted = extract_text_from_file(fpath)
+            documents.append({
+                "name": clean_unicode_text(fname),
+                "relative_path": relative_path,
+                "ext": os.path.splitext(fname)[1].lower(),
+                "text": extracted,
+                "sha256": h,
+                "role": role,
+                "warning": "" if extracted.strip() else "Extracao sem texto retornado.",
+            })
+            fpath_by_rel[relative_path] = fpath
+
+        target_docs = [d for d in documents if d.get("role") == "alvo_principal"] or documents
+        has_supporting_docs = any(d.get("role") == "apoio_cruzamento" for d in documents)
 
         visual_inventory = visual_pipeline.extract_visual_inventory(
-            lote_dir, os.path.join(rel_dir, "visuais"), documents)
+            lote_dir, os.path.join(rel_dir, "visuais"), target_docs)
 
         skills_ativas = [s["skill"] for s in p.get("skills_recommendation", [])]
         semantic_state = semantic_pipeline.initialize_semantic_state(documents, skills_ativas)
 
         all_findings = []
-        if os.path.exists(lote_dir):
-            for dirpath, _, filenames in os.walk(lote_dir):
-                for fname in sorted(filenames):
-                    if fname.startswith('.') or fname in ('README.md', 'decisoes.yaml'):
-                        continue
-                    fpath = os.path.join(dirpath, fname)
-                    sf = analyze_document_structure(fpath)
-                    tf = analyze_document_domain_technical(fpath, skills_ativas)
-                    all_findings.extend(sf)
-                    all_findings.extend(tf)
+        for doc in target_docs:
+            fpath = fpath_by_rel.get(doc["relative_path"])
+            if not fpath:
+                continue
+            sf = analyze_document_structure(fpath)
+            tf = analyze_document_domain_technical(fpath, skills_ativas)
+            all_findings.extend(sf)
+            all_findings.extend(tf)
 
-        # Correlaciona exclusivamente os documentos deste lote e normaliza o SSOT.
-        all_findings.extend(specialized_controls.run_specialized_controls(documents, skills_ativas))
-        all_findings.extend(advanced_specialized_controls.run(documents, skills_ativas))
-        all_findings.extend(cross_document.run(documents, skills_ativas))
-        all_findings.extend(tabular_visual_controls.run(documents, skills_ativas))
-        all_findings.extend(audit_pipeline.find_cross_document_conflicts(documents))
+        # Controles individuais executam apenas sobre o(s) documento(s)-alvo principal(is).
+        all_findings.extend(specialized_controls.run_specialized_controls(target_docs, skills_ativas))
+        all_findings.extend(advanced_specialized_controls.run(target_docs, skills_ativas))
+        all_findings.extend(tabular_visual_controls.run(target_docs, skills_ativas))
+
+        # Correlação cruzada usa todo o lote normativo, mas ancora doc_origem no alvo_principal.
+        cross_findings = []
+        cross_findings.extend(cross_document.run(documents, skills_ativas))
+        cross_findings.extend(audit_pipeline.find_cross_document_conflicts(documents))
+        if has_supporting_docs and target_docs:
+            target_paths = {d["relative_path"] for d in target_docs}
+            target_names = {d["name"] for d in target_docs}
+            default_target = target_docs[0]
+            for cf in cross_findings:
+                if cf.get("doc_path") in target_paths or cf.get("doc_origem") in target_names:
+                    continue
+                matched_src = next(
+                    (
+                        src for src in (cf.get("evidence_sources") or [])
+                        if src.get("document_path") in target_paths or src.get("document_name") in target_names
+                    ),
+                    None,
+                )
+                cf["doc_path"] = matched_src["document_path"] if matched_src else default_target["relative_path"]
+                cf["doc_origem"] = matched_src["document_name"] if matched_src else default_target["name"]
+        all_findings.extend(cross_findings)
         all_findings = audit_pipeline.normalize_findings(lote_name, all_findings, documents)
         coverage = audit_pipeline.build_extraction_coverage(documents)
         # Separa achados por tipo/categoria para enriquecimento dos relatórios
@@ -1966,10 +2145,11 @@ def tool_run_full_audit(lote_path: str = None) -> str:
             'timestamp': ts,
             'metadata': {
                 'lote': lote_name,
-                'versao_documento': 'v1.0',
-                'timestamp': ts,
+                'versao_documento': detected_version,
+                'timestamp': ts_leaf,
             },
             'baseline_files': baseline_files,
+            'external_inputs': external_inputs,
             'achados': all_findings,
             'lacunas': lacunas_list,
             'riscos': riscos_list,
@@ -1978,7 +2158,7 @@ def tool_run_full_audit(lote_path: str = None) -> str:
             'esclarecimentos': esclarecimentos_list,
             'checklists_status': audit_pipeline.build_checklist_status(p.get('active_checklists', []), all_findings, coverage),
             'skills_ativas': skills_ativas,
-            'iqd_denominador': audit_engine.compute_checklist_denominator(root, p.get('active_checklists', []), len(baseline_files)),
+            'iqd_denominador': audit_engine.compute_checklist_denominator(root, p.get('active_checklists', []), len(target_docs)),
             'schema_version': audit_pipeline.SCHEMA_VERSION,
             'cobertura_extracao': coverage,
             'visual_inventory': visual_inventory,
@@ -2265,6 +2445,7 @@ def _load_baseline_document(root: str, timestamp: str, baseline_entry: dict) -> 
         "relative_path": relative_path,
         "ext": os.path.splitext(relative_path)[1].lower(),
         "sha256": digest,
+        "role": str(baseline_entry.get("role") or "alvo_principal"),
         "text": raw_text,
         "located_text": located_text,
     }
@@ -2283,6 +2464,7 @@ def _semantic_state_from_report(data: dict) -> dict:
         documents.append({
             "relative_path": relative_path,
             "ext": ext,
+            "role": str(item.get("role") or "alvo_principal"),
             "text": "texto extraído" if coverage.get("status") == "extraido" else "",
         })
     state = semantic_pipeline.initialize_semantic_state(documents, data.get("skills_ativas", []))
@@ -2329,6 +2511,14 @@ def tool_get_semantic_review_manifest(timestamp: str) -> str:
         "reviewed_scope_count": len(required & reviewed),
         "pending_scope_count": len(required - reviewed),
         "skills": grouped,
+        "baseline_files": [
+            {
+                "name": str(item.get("name") or os.path.basename(str(item.get("path", "")))),
+                "path": str(item.get("path", "")),
+                "role": str(item.get("role") or "alvo_principal"),
+            }
+            for item in data.get("baseline_files", [])
+        ],
         "unreadable_documents": state.get("unreadable_documents", []),
         "existing_findings": existing,
         "adjudication_counts": adjudication["counts"],
@@ -2473,7 +2663,11 @@ def _refresh_analysis_outputs(data: dict, timestamp: str, root: str, build_maste
     else:
         data["parecer"], data["parecer_badge"] = audit_engine.calculate_parecer(raw_for_calc, data["lacunas"])
     data["decision_status"] = "pendente_adjudicacao" if adjudication["pending"] else "concluido"
-    denom = kpis.get("iqd_denominador", max(len(data.get("baseline_files", [])) * 15, 30))
+    target_count = sum(
+        1 for item in data.get("baseline_files", [])
+        if item.get("role", "alvo_principal") == "alvo_principal"
+    ) or len(data.get("baseline_files", []))
+    denom = kpis.get("iqd_denominador", max(target_count * 15, 30))
     if adjudication["pending"]:
         kpis["iqd"] = "—"
         kpis["iqd_denominador"] = denom
@@ -2698,6 +2892,16 @@ def tool_record_semantic_analysis(timestamp: str, reviewed_scopes: list[dict], f
     all_scope_results = dict(state.get("scope_results", {}))
     all_scope_results.update(submitted_scope_results)
     baseline_entries = {str(item.get("path", "")): item for item in data.get("baseline_files", [])}
+    has_primary_targets = any(entry.get("role") == "alvo_principal" for entry in baseline_entries.values())
+    target_entries = [entry for entry in baseline_entries.values() if entry.get("role") == "alvo_principal"]
+    primary_target_doc = None
+    if len(target_entries) == 1:
+        t_entry = target_entries[0]
+        t_path = str(t_entry.get("path", ""))
+        primary_target_doc = {
+            "name": str(t_entry.get("name") or os.path.basename(t_path)),
+            "relative_path": t_path,
+        }
     loaded_sources = {}
     normalized_candidates = []
     batch_name = _extract_batch_name(timestamp, rel_path)
@@ -2725,13 +2929,25 @@ def tool_record_semantic_analysis(timestamp: str, reviewed_scopes: list[dict], f
         missing_source_scopes = []
         for path in source_paths:
             key = semantic_pipeline.scope_key(skill, path)
+            doc_role = str(baseline_entries[path].get("role", "alvo_principal"))
+            if key not in required and has_primary_targets and doc_role == "apoio_cruzamento":
+                continue
             outcome = all_scope_results.get(key, {}).get("status", "revisado" if key in all_reviewed_scopes else "pendente")
             if outcome != "revisado":
                 missing_source_scopes.append(path)
+        skill_required_scopes = {k for k in required if k.startswith(f"{skill}::")}
+        if skill_required_scopes and not any(
+            semantic_pipeline.scope_key(skill, path) in required for path in source_paths
+        ):
+            if not any(
+                all_scope_results.get(k, {}).get("status", "revisado" if k in all_reviewed_scopes else "pendente") == "revisado"
+                for k in skill_required_scopes
+            ):
+                missing_source_scopes.append(sorted(source_paths)[0])
         if missing_source_scopes:
             raise ValueError(f"A fonte do achado não foi marcada como revisada/aplicável para {skill}: {', '.join(sorted(missing_source_scopes))}.")
         normalized_candidates.append(semantic_pipeline.normalize_semantic_finding(
-            raw, loaded_sources, active_skills, batch_name))
+            raw, loaded_sources, active_skills, batch_name, primary_target_doc=primary_target_doc))
 
     existing = data.get("findings", [])
     known_ids = {item.get("id") for item in existing}
@@ -3641,13 +3857,17 @@ TOOLS_MANIFEST = [
         "name": "profile_baseline",
         "description": "Triagem adaptativa do lote: detecta domínios semanticamente, mapeia checklists ativos/inaplicáveis, recomenda skills com justificativa e gera entrada/decisoes.yaml.",
         "inputSchema": {"type": "object", "properties": {
-            "lote_path": {"type": "string", "description": "Caminho relativo do lote específico. Se omitido, detecta todos os lotes em entrada/."}
+            "lote_path": {"type": "string", "description": "Caminho relativo do lote específico. Se omitido, detecta todos os lotes em entrada/."},
+            "primary_files": {"type": "array", "items": {"type": "string"}, "description": "Lista opcional de nomes/caminhos relativos dos documentos-alvo principais do lote; os demais documentos normativos são classificados como apoio_cruzamento."}
         }, "required": []}
     },
     {
         "name": "run_full_audit",
         "description": "Executa auditoria isolada de um lote, extrai imagens para inventário visual e gera SSOT/HTML. Depois, use get_visual_assets para inspeção multimodal e record_visual_analysis para persistir achados visuais.",
-        "inputSchema": {"type": "object", "properties": {"lote_path": {"type": "string", "description": "Caminho relativo do lote em entrada/."}}, "required": []}
+        "inputSchema": {"type": "object", "properties": {
+            "lote_path": {"type": "string", "description": "Caminho relativo do lote em entrada/."},
+            "primary_files": {"type": "array", "items": {"type": "string"}, "description": "Lista opcional de nomes/caminhos relativos dos documentos-alvo principais do lote; os demais documentos normativos são classificados como apoio_cruzamento."}
+        }, "required": []}
     },
     {
         "name": "get_visual_assets",
@@ -3832,11 +4052,11 @@ def dispatch_tool(name: str, args: dict) -> str:
     if name == "freeze_baseline":
         return tool_freeze_baseline(args.get("lote_path"))
     elif name == "profile_baseline":
-        return tool_profile_baseline(args.get("lote_path"))
+        return tool_profile_baseline(args.get("lote_path"), primary_files=args.get("primary_files"))
     elif name == "check_environment":
         return tool_check_environment()
     elif name == "run_full_audit":
-        return tool_run_full_audit(args.get("lote_path"))
+        return tool_run_full_audit(args.get("lote_path"), primary_files=args.get("primary_files"))
     elif name == "record_visual_analysis":
         return tool_record_visual_analysis(args.get("timestamp", ""), args.get("reviewed_asset_ids", []), args.get("findings", []))
     elif name == "get_semantic_review_manifest":

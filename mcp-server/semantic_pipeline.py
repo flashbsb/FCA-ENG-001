@@ -58,9 +58,13 @@ def split_text(text: str, start_char: int = 0, max_chars: int = 12000) -> dict:
 
 def build_required_scopes(documents: list[dict], skills: list[str]) -> tuple[list[dict], list[str]]:
     """Monta a matriz skill/documento; planilhas e diagramas usam seus canais próprios."""
+    has_primary_targets = any(doc.get("role") == "alvo_principal" for doc in documents)
     readable = []
     unreadable = []
     for doc in documents:
+        role = str(doc.get("role", "alvo_principal"))
+        if role == "insumo_externo":
+            continue
         ext = str(doc.get("ext", "")).lower()
         path = str(doc.get("relative_path", ""))
         if ext in VISUAL_ONLY_EXTS:
@@ -69,13 +73,18 @@ def build_required_scopes(documents: list[dict], skills: list[str]) -> tuple[lis
             continue
         if str(doc.get("text", "")).strip():
             readable.append(doc)
-        else:
+        elif not has_primary_targets or role == "alvo_principal":
             unreadable.append(path)
 
     scopes = []
     for skill in dict.fromkeys(str(s) for s in skills if str(s) not in VISUAL_SKILLS):
         for doc in readable:
-            if skill in SPREADSHEET_SKILLS and str(doc.get("ext", "")).lower() not in {".xlsx", ".xls", ".ods", ".csv", ".tsv"}:
+            doc_ext = str(doc.get("ext", "")).lower()
+            doc_role = str(doc.get("role", "alvo_principal"))
+            if skill in SPREADSHEET_SKILLS:
+                if doc_ext not in {".xlsx", ".xls", ".ods", ".csv", ".tsv"}:
+                    continue
+            elif has_primary_targets and doc_role != "alvo_principal":
                 continue
             scopes.append({"skill": skill, "document_path": str(doc["relative_path"])})
     return scopes, sorted(path for path in unreadable if path)
@@ -90,6 +99,7 @@ def normalize_semantic_finding(
     documents_by_path: dict[str, dict],
     active_skills: set[str],
     batch_name: str,
+    primary_target_doc: dict | None = None,
 ) -> dict:
     """Valida evidências literais e produz um achado compatível com o SSOT."""
     if not isinstance(raw, dict):
@@ -163,8 +173,28 @@ def normalize_semantic_finding(
         raise ValueError("Evidência E3 exige ao menos duas citações literais para confronto direto.")
 
     primary = validated_sources[0]
+    target_source = next(
+        (
+            src for src in validated_sources
+            if str(documents_by_path.get(src["document_path"], {}).get("role", "")) == "alvo_principal"
+        ),
+        None,
+    )
+    if target_source is not None:
+        anchor_name = target_source["document_name"]
+        anchor_path = target_source["document_path"]
+        anchor_location = target_source["location"]
+    elif primary_target_doc:
+        anchor_name = str(primary_target_doc.get("name") or primary["document_name"])
+        anchor_path = str(primary_target_doc.get("relative_path") or primary["document_path"])
+        anchor_location = f"Confronto cruzado ({primary['document_name']} · {primary['location']})"
+    else:
+        anchor_name = primary["document_name"]
+        anchor_path = primary["document_path"]
+        anchor_location = primary["location"]
+
     rule_id = str(raw.get("rule_id", "")).strip() or f"SEM-{skill.replace('analisar-', '').upper()}"
-    material = "|".join((batch_name, skill, rule_id, primary["document_path"],
+    material = "|".join((batch_name, skill, rule_id, anchor_path,
                          normalize_evidence_text(title),
                          "|".join(normalize_evidence_text(s["quote"]) for s in validated_sources)))
     finding_id = "SEM-" + hashlib.sha256(material.encode("utf-8")).hexdigest()[:10].upper()
@@ -196,15 +226,16 @@ def normalize_semantic_finding(
     return {
         "id": finding_id,
         "title": title,
-        "doc_origem": primary["document_name"],
-        "loc": primary["location"],
+        "doc_origem": anchor_name,
+        "documento": anchor_name,
+        "loc": anchor_location,
         "categoria": str(raw.get("categoria", f"Análise semântica / {skill}"))[:300],
         "tipo": finding_type,
         "evidencia": evidence,
         "citacao": citations,
         "evidencia_literal": citations,
-        "localizacao_exata": primary["location"],
-        "doc_path": primary["document_path"],
+        "localizacao_exata": anchor_location,
+        "doc_path": anchor_path,
         "rule_id": rule_id,
         "criticidade": criticality,
         "prioridade": priority,

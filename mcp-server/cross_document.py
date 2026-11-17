@@ -26,6 +26,8 @@ def delivery_deadline_conflicts(documents: list[dict]) -> list[dict]:
     """Confronta prazos explicitamente qualificados como prazo de entrega."""
     matches = []
     rx = re.compile(r"\bprazo\s+de\s+entrega\D{0,60}?(\d+)\s*(dias?|mes(?:es)?)\b", re.I)
+    has_primary = any(doc.get("role") == "alvo_principal" for doc in documents)
+    has_supporting = any(doc.get("role") == "apoio_cruzamento" for doc in documents)
     for doc in documents:
         for match in rx.finditer(doc.get("text", "")):
             matches.append((doc, match, f"{match.group(1)} {match.group(2).lower()}"))
@@ -34,13 +36,21 @@ def delivery_deadline_conflicts(documents: list[dict]) -> list[dict]:
             (a, b)
             for i, a in enumerate(matches)
             for b in matches[i + 1:]
-            if a[0]["relative_path"] != b[0]["relative_path"] and a[2] != b[2]
+            if a[0]["relative_path"] != b[0]["relative_path"]
+            and a[2] != b[2]
+            and (
+                not (has_primary and has_supporting)
+                or a[0].get("role") == "alvo_principal"
+                or b[0].get("role") == "alvo_principal"
+            )
         ),
         None,
     )
     if not pair:
         return []
     first, second = pair
+    if has_primary and has_supporting and first[0].get("role") != "alvo_principal" and second[0].get("role") == "alvo_principal":
+        first, second = second, first
     doc_a, match_a, value_a = first
     doc_b, match_b, value_b = second
     line_a = doc_a["text"][:match_a.start()].count("\n") + 1
@@ -109,6 +119,11 @@ def run(documents: list[dict], skills: list[str]) -> list[dict]:
         for doc in documents
     ]
     findings = delivery_deadline_conflicts(norm_docs)
+    has_primary = any(doc.get("role") == "alvo_principal" for doc in norm_docs)
+    target_norm_docs = (
+        [doc for doc in norm_docs if doc.get("role", "alvo_principal") == "alvo_principal"]
+        if has_primary else norm_docs
+    )
     if "analisar-rfp" in skills:
-        findings.extend(standards_without_edition(norm_docs))
+        findings.extend(standards_without_edition(target_norm_docs))
     return findings

@@ -278,6 +278,7 @@ def build_extraction_coverage(documents: list[dict]) -> dict:
         status = "extraido" if text.strip() else "nao_verificavel"
         rows.append({
             "arquivo": doc["relative_path"], "formato": doc.get("ext", ""),
+            "role": doc.get("role", "alvo_principal"),
             "status": status, "caracteres_extraidos": len(text),
             "aviso": doc.get("warning", "") or ("Sem texto extraível; OCR ou leitor específico necessário." if not text.strip() else "")
         })
@@ -426,6 +427,8 @@ def build_checklist_status(active_checklists: list[str], findings: list[dict], c
 def find_cross_document_conflicts(documents: list[dict]) -> list[dict]:
     """Detecta valores divergentes de SLA declarados em arquivos diferentes."""
     values = defaultdict(list)
+    has_primary = any(doc.get("role") == "alvo_principal" for doc in documents)
+    has_supporting = any(doc.get("role") == "apoio_cruzamento" for doc in documents)
     pattern = re.compile(r"\b(?:sla|disponibilidade)[^\n.]{0,120}?(\d{1,2}[,.]\d{1,4})\s*%", re.I)
     for doc in documents:
         text = strip_non_normative_comments(doc.get("text", ""))
@@ -435,14 +438,27 @@ def find_cross_document_conflicts(documents: list[dict]) -> list[dict]:
             values[value].append((doc, match.group(0), line_no))
     if len(values) < 2:
         return []
-    refs = [(value, entries[0]) for value, entries in values.items() if entries]
-    if len({entry[1][0]["relative_path"] for entry in refs}) < 2:
-        return []
-    first = refs[0]
-    second = next(
-        (r for r in refs[1:] if r[1][0]["relative_path"] != first[1][0]["relative_path"]),
-        refs[1],
+    flat_entries = [(value, entry) for value, entries in values.items() for entry in entries]
+    pair = next(
+        (
+            (a, b)
+            for i, a in enumerate(flat_entries)
+            for b in flat_entries[i + 1:]
+            if a[0] != b[0]
+            and a[1][0]["relative_path"] != b[1][0]["relative_path"]
+            and (
+                not (has_primary and has_supporting)
+                or a[1][0].get("role") == "alvo_principal"
+                or b[1][0].get("role") == "alvo_principal"
+            )
+        ),
+        None,
     )
+    if not pair:
+        return []
+    first, second = pair
+    if has_primary and has_supporting and first[1][0].get("role") != "alvo_principal" and second[1][0].get("role") == "alvo_principal":
+        first, second = second, first
     value_a, (doc_a, quote_a, line_a) = first
     value_b, (doc_b, quote_b, line_b) = second
     loc_a = f"Linha {line_a}"

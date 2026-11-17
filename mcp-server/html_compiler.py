@@ -688,27 +688,81 @@ def _build_rastrea_html(data_json: dict, rel_dir: str = None) -> str:
     kpis = data_json.get("kpis", {})
     findings = data_json.get("findings", [])
 
+    def _role_badge_html(role_value: str) -> str:
+        role_cf = str(role_value or "alvo_principal").strip()
+        if role_cf == "apoio_cruzamento":
+            return '<span class="badge-crit crit-media">🔗 Apoio / Confronto Cruzado</span>'
+        if role_cf == "insumo_externo":
+            return '<span class="badge-crit crit-alta">🔍 Insumo Externo (Não Fonte de Verdade)</span>'
+        return '<span class="badge-crit crit-baixa">🎯 Documento-Alvo Principal</span>'
+
+    role_by_ref = {}
     b_rows = ""
     for bf in baseline_files:
-        name = html.escape(str(bf.get("name", bf.get("filename", "—"))))
+        name_raw = str(bf.get("name", bf.get("filename", "—")))
+        path_raw = str(bf.get("path", name_raw))
+        role_raw = str(bf.get("role") or "alvo_principal").strip()
+        role_by_ref[path_raw] = role_raw
+        role_by_ref[name_raw] = role_raw
+        name = html.escape(name_raw)
+        role_badge = _role_badge_html(role_raw)
         size = int(bf.get("size_bytes", bf.get("size", 0)) or 0)
         h = html.escape(str(bf.get("sha256", "—")))
-        b_rows += f"<tr><td><code>{name}</code></td><td>{size} bytes</td><td><code>{h}</code></td></tr>"
+        b_rows += f"<tr><td><code>{name}</code></td><td>{role_badge}</td><td>{size} bytes</td><td><code>{h}</code></td></tr>"
 
     if not b_rows:
-        b_rows = '<tr><td colspan="3">Nenhum arquivo de baseline registrado.</td></tr>'
+        b_rows = '<tr><td colspan="4">Nenhum arquivo de baseline registrado.</td></tr>'
+
+    external_inputs = data_json.get("external_inputs", []) or []
+    external_inputs_html = ""
+    if external_inputs:
+        ext_rows = ""
+        for ei in external_inputs:
+            ei_name = html.escape(str(ei.get("name", ei.get("path", "—"))))
+            ei_size = int(ei.get("size_bytes", ei.get("size", 0)) or 0)
+            ei_hash = html.escape(str(ei.get("sha256", "—")))
+            ei_note = html.escape(str(ei.get("nota", "Insumo não normativo — não considerado fonte de verdade.")))
+            ext_rows += (
+                f"<tr><td><code>{ei_name}</code></td>"
+                f"<td>{_role_badge_html('insumo_externo')}</td>"
+                f"<td>{ei_size} bytes</td><td><code>{ei_hash}</code></td><td>{ei_note}</td></tr>"
+            )
+        external_inputs_html = f"""
+        <h3 style="margin-top:35px;">Insumos Externos de Auditoria Cruzada (Não-Normativos — Não Fonte de Verdade)</h3>
+        <div class="ssot-intro-note">
+            <i class="fa-solid fa-triangle-exclamation"></i> Os arquivos abaixo não integram a baseline normativa e não são tratados como fonte de verdade; eventuais hipóteses originadas deles exigem comprovação literal nos documentos da baseline.
+        </div>
+        <div class="table-responsive">
+            <table class="rpt-table">
+                <thead>
+                    <tr>
+                        <th>Nome do Arquivo</th>
+                        <th>Classificação</th>
+                        <th>Tamanho</th>
+                        <th>Hash SHA-256</th>
+                        <th>Regra de Custódia</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {ext_rows}
+                </tbody>
+            </table>
+        </div>"""
 
     # Cobertura de Extração por Arquivo
     coverage = data_json.get("cobertura_extracao", {})
     cov_files = coverage.get("arquivos", []) if isinstance(coverage, dict) else []
     cov_rows = ""
     for cf in cov_files:
-        c_file = html.escape(str(cf.get("arquivo", "—")))
+        c_file_raw = str(cf.get("arquivo", "—"))
+        c_file = html.escape(c_file_raw)
+        c_role = cf.get("role") or role_by_ref.get(c_file_raw) or role_by_ref.get(os.path.basename(c_file_raw)) or "alvo_principal"
+        c_role_badge = _role_badge_html(c_role)
         c_fmt = html.escape(str(cf.get("formato", "—")))
         c_st = html.escape(str(cf.get("status", "—")))
         c_chars = int(cf.get("caracteres_extraidos", 0) or 0)
         c_aviso = html.escape(str(cf.get("aviso", "") or "—"))
-        cov_rows += f"<tr><td><code>{c_file}</code></td><td><code>{c_fmt}</code></td><td>{c_st}</td><td>{c_chars}</td><td>{c_aviso}</td></tr>"
+        cov_rows += f"<tr><td><code>{c_file}</code></td><td>{c_role_badge}</td><td><code>{c_fmt}</code></td><td>{c_st}</td><td>{c_chars}</td><td>{c_aviso}</td></tr>"
     coverage_table_html = ""
     if cov_files:
         coverage_table_html = f"""
@@ -718,6 +772,7 @@ def _build_rastrea_html(data_json: dict, rel_dir: str = None) -> str:
                 <thead>
                     <tr>
                         <th>Arquivo</th>
+                        <th>Papel no Lote</th>
                         <th>Formato</th>
                         <th>Status de Extração</th>
                         <th>Caracteres Extraídos</th>
@@ -772,7 +827,8 @@ def _build_rastrea_html(data_json: dict, rel_dir: str = None) -> str:
         </div>"""
 
     # Memória de Cálculo do IQD
-    denom = int(kpis.get("iqd_denominador") or max(len(baseline_files) * 15, 30))
+    target_count = sum(1 for bf in baseline_files if bf.get("role", "alvo_principal") == "alvo_principal") or len(baseline_files)
+    denom = int(kpis.get("iqd_denominador") or max(target_count * 15, 30))
     pesos = {"Crítica": 4, "Alta": 3, "Média": 2, "Baixa": 1, "Informativa": 0}
     confirmed_list = _confirmed_findings(findings)
     pending_n = int(kpis.get("achados_pendentes_adjudicacao", 0))
@@ -861,6 +917,7 @@ def _build_rastrea_html(data_json: dict, rel_dir: str = None) -> str:
                 <thead>
                     <tr>
                         <th>Nome do Arquivo</th>
+                        <th>Papel no Lote</th>
                         <th>Tamanho</th>
                         <th>Hash SHA-256</th>
                     </tr>
@@ -871,6 +928,7 @@ def _build_rastrea_html(data_json: dict, rel_dir: str = None) -> str:
             </table>
         </div>
 
+        {external_inputs_html}
         {coverage_table_html}
         {semantic_matrix_html}
         {iqd_memory_html}
