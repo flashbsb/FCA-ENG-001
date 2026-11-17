@@ -3339,25 +3339,36 @@ def tool_create_review_revision(source_analysis: str, reason: str = "Ajuste e Ad
         json.dump(data, f, indent=2, ensure_ascii=False)
         
     import html_compiler
-    html_compiler.compile_timestamp_html(f"{lote}/{version}/{new_ts}", root_dir=root)
+    new_relpath = f"{lote}/{version}/{new_ts}"
+    evo_res = html_compiler.compile_evolution_html(new_relpath, root_dir=root)
+    html_compiler.compile_timestamp_html(new_relpath, root_dir=root)
+    if src_relpath != new_relpath:
+        html_compiler.compile_timestamp_html(src_relpath, root_dir=root)
     tool_build_master_index()
     
     return json.dumps({
         "status": "success",
         "message": "Nova rodada de revisão criada com sucesso.",
         "parent_analysis": src_relpath,
-        "new_analysis_path": f"{lote}/{version}/{new_ts}",
+        "new_analysis_path": new_relpath,
         "new_timestamp": new_ts,
         "relatorios_dir": dest_rel,
-        "html_url": f"{lote}/{version}/{new_ts}/relatorios/index.html"
+        "html_url": f"{new_relpath}/relatorios/index.html",
+        "evolution_html": evo_res.get("evolution_html", "")
     }, indent=2, ensure_ascii=False)
 
 
-def tool_reconcile_versions(previous_timestamp: str, current_timestamp: str) -> str:
+def tool_reconcile_versions(
+    previous_timestamp: str,
+    current_timestamp: str,
+    summary_notes: str = "",
+    external_audit_disposition: list[dict] = None,
+) -> str:
     """
     Compara duas rodadas/versões de análise (previous_timestamp vs current_timestamp),
-    gera o Quadro de Reconciliação Técnica e Evolução (Diff de Achados: sanados, reincidentes, novos),
-    persiste version_reconciliation em dados_analise.json da análise atual e recompila os relatórios HTML.
+    gera o relatório evolutivo dedicado (evolucao.html) e o Quadro de Reconciliação Técnica
+    (novos, refinados, expurgados/saneados e reincidentes), persiste em dados_analise.json
+    e recompila os relatórios HTML sem embutir o diff no corpo do relatório principal.
     """
     if not _is_valid_analysis_identifier(previous_timestamp) or not _is_valid_analysis_identifier(current_timestamp):
         raise ValueError("Identificadores de análise inválidos para reconciliação de versões.")
@@ -3376,17 +3387,27 @@ def tool_reconcile_versions(previous_timestamp: str, current_timestamp: str) -> 
         curr_data = json.load(f)
 
     import audit_engine
-    reconciliation = audit_engine.reconcile_versions(prev_data, curr_data)
+    import html_compiler
+    reconciliation = audit_engine.reconcile_versions(
+        prev_data,
+        curr_data,
+        summary_notes=summary_notes,
+        external_audit_disposition=external_audit_disposition,
+    )
     curr_data["version_reconciliation"] = reconciliation
     with open(curr_json_path, "w", encoding="utf-8") as f:
         json.dump(curr_data, f, indent=2, ensure_ascii=False)
 
+    evo_res = html_compiler.compile_evolution_html(curr_relpath, root_dir=root)
     html_compiler.compile_timestamp_html(curr_relpath, root_dir=root)
+    if prev_relpath != curr_relpath:
+        html_compiler.compile_timestamp_html(prev_relpath, root_dir=root)
     tool_build_master_index()
     return json.dumps({
         "status": "success",
         "previous_analysis": prev_relpath,
         "current_analysis": curr_relpath,
+        "evolution_html": evo_res.get("evolution_html", ""),
         "reconciliation": reconciliation,
     }, indent=2, ensure_ascii=False)
 
@@ -3626,6 +3647,25 @@ def tool_build_master_index() -> str:
         if not entrada_files and json_files:
             entrada_files = json_files
 
+        evolucao_rel_path = ""
+        rel_evolucao_file = os.path.join(rel_dir, "evolucao.html")
+        ver_evolucao_file = os.path.join(analise_dir, lote_parent, version, "evolucao.html") if lote_parent else ""
+        has_version_history = bool(
+            data_json.get("version_reconciliation")
+            or data_json.get("parent_analysis")
+            or data_json.get("audit_trail")
+        )
+        if not os.path.isfile(rel_evolucao_file) and has_version_history:
+            try:
+                import html_compiler
+                html_compiler.compile_evolution_html(rel_path, root_dir=root)
+            except Exception:
+                pass
+        if os.path.isfile(rel_evolucao_file):
+            evolucao_rel_path = f"{rel_path}/relatorios/evolucao.html"
+        elif ver_evolucao_file and os.path.isfile(ver_evolucao_file):
+            evolucao_rel_path = f"{lote_parent}/{version}/evolucao.html"
+
         runs.append({
             "timestamp": ts,
             "version": version,
@@ -3642,6 +3682,7 @@ def tool_build_master_index() -> str:
             "lote_parent": lote_parent,
             "rel_path": rel_path,
             "index_html": f"{rel_path}/relatorios/index.html",
+            "evolution_html": evolucao_rel_path,
             "metrics": {
                 "total_achados": total_achados,
                 "confirmados": adjudication["confirmed"] if data_json else 0,
@@ -3755,6 +3796,17 @@ def tool_build_master_index() -> str:
             esc_lote = html.escape(str(r['lote_name']))
             esc_iqd = html.escape(str(m['iqd']))
             safe_href = html.escape(str(r['index_html']), quote=True)
+            safe_evo_href = html.escape(str(r.get('evolution_html') or ''), quote=True)
+            evo_card_btn = (
+                f' <a href="{safe_evo_href}" class="btn-open-report" style="background:#7c3aed; flex:1 1 170px;">'
+                f'<i class="fa-solid fa-code-compare"></i> Evolução de Versões</a>'
+                if safe_evo_href else ""
+            )
+            evo_row_btn = (
+                f' <a href="{safe_evo_href}" class="btn-open-report" style="padding:6px 10px; font-size:0.75rem; background:#7c3aed;">'
+                f'<i class="fa-solid fa-code-compare"></i> Evolução</a>'
+                if safe_evo_href else ""
+            )
 
             cards_html += f"""
             <div class="run-card {card_status_cls}" data-search="{safe_search_str}" data-parecer="{card_status_cls}">
@@ -3798,8 +3850,8 @@ def tool_build_master_index() -> str:
                         <div class="metric-sub"><span class="lbl">IQD</span><span class="val iqd">{esc_iqd}</span></div>
                     </div>
                 </div>
-                <div class="run-card-footer">
-                    <a href="{safe_href}" class="btn-open-report"><i class="fa-solid fa-chart-column"></i> Abrir Relatório Consolidado HTML</a>
+                <div class="run-card-footer" style="display:flex; flex-wrap:wrap; gap:8px;">
+                    <a href="{safe_href}" class="btn-open-report" style="flex:1 1 200px;"><i class="fa-solid fa-chart-column"></i> Abrir Relatório Consolidado HTML</a>{evo_card_btn}
                 </div>
             </div>"""
 
@@ -3817,7 +3869,7 @@ def tool_build_master_index() -> str:
                   </div>
                 </td>
                 <td><div style="max-width:400px; font-size:0.82rem; color:var(--text-main);">{resumo_html}</div></td>
-                <td><a href="{safe_href}" class="btn-open-report" style="padding:6px 10px; font-size:0.75rem;"><i class="fa-solid fa-arrow-up-right-from-square"></i> Abrir</a></td>
+                <td><div style="display:flex; flex-direction:column; gap:6px;"><a href="{safe_href}" class="btn-open-report" style="padding:6px 10px; font-size:0.75rem;"><i class="fa-solid fa-arrow-up-right-from-square"></i> Abrir</a>{evo_row_btn}</div></td>
             </tr>"""
 
         master = template.replace('__TOTAL_RUNS__', str(len(runs)))
@@ -4025,10 +4077,16 @@ TOOLS_MANIFEST = [
     },
     {
         "name": "reconcile_versions",
-        "description": "Compara duas versões/rodadas de análise (previous_timestamp vs current_timestamp), gera o Quadro de Reconciliação Técnica e Evolução (sanados, reincidentes e novos achados), persiste em dados_analise.json e recompila o HTML.",
+        "description": "Compara duas versões/rodadas de análise (previous_timestamp vs current_timestamp), gera o relatório dedicado evolucao.html e o Quadro de Reconciliação Técnica e Evolução (novos, refinados, expurgados/saneados e reincidentes), persiste em dados_analise.json e recompila os HTMLs.",
         "inputSchema": {"type": "object", "properties": {
             "previous_timestamp": {"type": "string", "description": "Timestamp ou caminho relativo da versão anterior."},
-            "current_timestamp": {"type": "string", "description": "Timestamp ou caminho relativo da versão atual."}
+            "current_timestamp": {"type": "string", "description": "Timestamp ou caminho relativo da versão atual."},
+            "summary_notes": {"type": "string", "description": "Sumário executivo opcional explicando o motivo e o escopo das alterações incorporadas na nova versão."},
+            "external_audit_disposition": {
+                "type": "array",
+                "items": {"type": "object"},
+                "description": "Opcional: matriz de disposição/rastreabilidade de apontamentos oriundos de insumos externos avaliados como não-fonte-de-verdade."
+            }
         }, "required": ["previous_timestamp", "current_timestamp"]}
     },
     {
@@ -4086,7 +4144,12 @@ def dispatch_tool(name: str, args: dict) -> str:
     elif name == "create_review_revision":
         return tool_create_review_revision(args.get("source_analysis", ""), args.get("reason", "Ajuste e Adjudicação de Relatório"), args.get("reviewer", "auditor"))
     elif name == "reconcile_versions":
-        return tool_reconcile_versions(args.get("previous_timestamp", ""), args.get("current_timestamp", ""))
+        return tool_reconcile_versions(
+            args.get("previous_timestamp", ""),
+            args.get("current_timestamp", ""),
+            summary_notes=args.get("summary_notes", ""),
+            external_audit_disposition=args.get("external_audit_disposition"),
+        )
     elif name == "build_master_index":
         return tool_build_master_index()
     else:

@@ -296,91 +296,6 @@ def _build_resumo_html(data_json: dict) -> str:
         for s in skills_ativas
     ])
 
-    reconciliation_html = ""
-    vr = data_json.get("version_reconciliation")
-    if isinstance(vr, dict) and vr:
-        v_ant = html.escape(str(vr.get("versao_anterior", "anterior")))
-        v_atu = html.escape(str(vr.get("versao_atual", "atual")))
-        n_san = int(vr.get("achados_sanados_count", 0))
-        n_rei = int(vr.get("achados_reincidentes_count", 0))
-        n_nov = int(vr.get("novos_achados_count", 0))
-        taxa_res = html.escape(str(vr.get("taxa_resolucao_pct", 0)))
-        delta_iqd = html.escape(str(vr.get("delta_iqd", "—")))
-
-        sanados_rows = ""
-        for item in vr.get("sanados", []):
-            s_id = html.escape(str(item.get("id_anterior", "—")))
-            s_tit = html.escape(str(item.get("title") or item.get("titulo") or "—"))
-            s_crit = html.escape(str(item.get("criticidade", "Média")))
-            s_loc = html.escape(str(item.get("loc") or item.get("localizacao") or "—"))
-            sanados_rows += f"<tr><td><code>{s_id}</code></td><td>{s_tit}</td><td>{s_crit}</td><td>{s_loc}</td></tr>"
-
-        reincidentes_rows = ""
-        for item in vr.get("reincidentes", []):
-            r_id_ant = html.escape(str(item.get("id_anterior", "—")))
-            r_id_atu_raw = str(item.get("id_atual", "—"))
-            r_id_atu = html.escape(r_id_atu_raw)
-            r_id_href = html.escape(r_id_atu_raw, quote=True)
-            r_link = f'<a href="#card-{r_id_href}" class="ssot-link">{r_id_atu}</a>' if r_id_atu_raw != "—" else "—"
-            r_tit = html.escape(str(item.get("title") or item.get("titulo") or "—"))
-            r_crit = html.escape(str(item.get("criticidade", "Média")))
-            r_loc = html.escape(str(item.get("loc_atual") or item.get("localizacao_atual") or "—"))
-            reincidentes_rows += f"<tr><td><code>{r_id_ant}</code> → {r_link}</td><td>{r_tit}</td><td>{r_crit}</td><td>{r_loc}</td></tr>"
-
-        novos_rows = ""
-        for item in vr.get("novos", []):
-            n_id_raw = str(item.get("id_atual", "—"))
-            n_id = html.escape(n_id_raw)
-            n_id_href = html.escape(n_id_raw, quote=True)
-            n_link = f'<a href="#card-{n_id_href}" class="ssot-link">{n_id}</a>' if n_id_raw != "—" else "—"
-            n_tit = html.escape(str(item.get("title") or item.get("titulo") or "—"))
-            n_crit = html.escape(str(item.get("criticidade", "Média")))
-            n_loc = html.escape(str(item.get("loc") or item.get("localizacao") or "—"))
-            novos_rows += f"<tr><td>{n_link}</td><td>{n_tit}</td><td>{n_crit}</td><td>{n_loc}</td></tr>"
-
-        reconciliation_html = f"""
-        <h4 style="margin-top:25px;">Quadro de Reconciliação Técnica e Evolução (Diff de Achados)</h4>
-        <div class="ssot-intro-note">
-            Comparação evolutiva entre a baseline anterior (<code>{v_ant}</code>) e a versão atual (<code>{v_atu}</code>).
-        </div>
-        <table class="rpt-table">
-            <thead>
-                <tr>
-                    <th>Métrica de Evolução</th>
-                    <th>Resultado</th>
-                </tr>
-            </thead>
-            <tbody>
-                <tr><td>Achados Sanados (Resolvidos)</td><td><strong style="color:var(--success);">{n_san}</strong></td></tr>
-                <tr><td>Achados Reincidentes (Persistentes)</td><td><strong style="color:var(--warning);">{n_rei}</strong></td></tr>
-                <tr><td>Novos Achados (Regressões / Adições)</td><td><strong style="color:var(--danger);">{n_nov}</strong></td></tr>
-                <tr><td>Taxa de Resolução</td><td><strong>{taxa_res}%</strong></td></tr>
-                <tr><td>Variação do IQD (Delta)</td><td><strong>{delta_iqd}</strong></td></tr>
-            </tbody>
-        </table>
-        <details style="margin-top:12px;">
-            <summary style="cursor:pointer; font-weight:700; color:var(--success);">🟢 Achados Sanados / Resolvidos ({n_san})</summary>
-            <div class="table-responsive"><table class="rpt-table">
-                <thead><tr><th>ID Anterior</th><th>Título</th><th>Criticidade</th><th>Localização Anterior</th></tr></thead>
-                <tbody>{sanados_rows or '<tr><td colspan="4">Nenhum achado sanado nesta comparação.</td></tr>'}</tbody>
-            </table></div>
-        </details>
-        <details style="margin-top:10px;">
-            <summary style="cursor:pointer; font-weight:700; color:var(--warning);">🟠 Achados Reincidentes / Persistentes ({n_rei})</summary>
-            <div class="table-responsive"><table class="rpt-table">
-                <thead><tr><th>ID Anterior → ID Atual</th><th>Título</th><th>Criticidade</th><th>Localização Atual</th></tr></thead>
-                <tbody>{reincidentes_rows or '<tr><td colspan="4">Nenhum achado reincidente nesta comparação.</td></tr>'}</tbody>
-            </table></div>
-        </details>
-        <details style="margin-top:10px;">
-            <summary style="cursor:pointer; font-weight:700; color:var(--danger);">🔴 Novos Achados / Regressões ({n_nov})</summary>
-            <div class="table-responsive"><table class="rpt-table">
-                <thead><tr><th>ID Atual</th><th>Título</th><th>Criticidade</th><th>Localização</th></tr></thead>
-                <tbody>{novos_rows or '<tr><td colspan="4">Nenhum novo achado nesta comparação.</td></tr>'}</tbody>
-            </table></div>
-        </details>
-        """
-
     return f"""
     <div class="resumo-executivo-container">
         {adjudication_note}
@@ -413,7 +328,6 @@ def _build_resumo_html(data_json: dict) -> str:
                 {semantic_html}
             </tbody>
         </table>
-        {reconciliation_html}
         
         <div class="ssot-intro-note" style="margin-top:22px;">
             <i class="fa-solid fa-fingerprint"></i> <strong>Baseline Auditada:</strong> {len(baseline_files)} arquivo(s) congelado(s) com hash criptográfico.
@@ -1097,6 +1011,33 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
     except Exception:
         master_href = "../../index.html"
 
+    evolution_nav_btn = ""
+    local_evo_path = os.path.join(rel_dir, "evolucao.html")
+    version_evo_path = os.path.join(os.path.dirname(os.path.dirname(rel_dir)), "evolucao.html")
+    has_evolution_meta = bool(
+        data_json
+        and (
+            data_json.get("version_reconciliation")
+            or data_json.get("parent_analysis")
+            or data_json.get("audit_trail")
+        )
+    )
+    if os.path.isfile(local_evo_path) or has_evolution_meta:
+        evo_href = "./evolucao.html"
+        evolution_nav_btn = (
+            f'<a href="{evo_href}" class="btn-action" style="background:#7c3aed;">'
+            f'<i class="fa-solid fa-code-compare"></i> Evolução de Versões</a>'
+        )
+    elif os.path.isfile(version_evo_path):
+        try:
+            evo_href = os.path.relpath(version_evo_path, rel_dir).replace('\\', '/')
+        except Exception:
+            evo_href = "../../evolucao.html"
+        evolution_nav_btn = (
+            f'<a href="{html.escape(evo_href, quote=True)}" class="btn-action" style="background:#7c3aed;">'
+            f'<i class="fa-solid fa-code-compare"></i> Evolução de Versões</a>'
+        )
+
     # Seção 2: Geração da Tabela Consolidada SSOT (Com Links Âncora por ID)
     ssot_table_rows = ""
     for f in findings:
@@ -1545,6 +1486,7 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
         .fa-shield-cat::before {{ content: "🛡"; }}
         .fa-user-gear::before {{ content: "⚙"; }}
         .fa-microchip::before {{ content: "⚙"; }}
+        .fa-code-compare::before {{ content: "⇄"; }}
 
         /* Navbar Fixa Superior */
         .top-navbar {{
@@ -1940,6 +1882,7 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
             <span>FCA-ENG-001 · Central de Revisão Técnica Independente</span>
         </div>
         <div class="actions-group">
+            {evolution_nav_btn}
             <a href="{master_href}" class="btn-action btn-master-home"><i class="fa-solid fa-house"></i> Central Master</a>
             <button class="btn-action btn-toggle-menu" onclick="toggleSidebar()"><i class="fa-solid fa-bars"></i> Menu</button>
             <button class="btn-action btn-print" onclick="window.print()"><i class="fa-solid fa-print"></i> Imprimir / PDF</button>
@@ -2228,6 +2171,694 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
         f.write(html_template)
 
     return f"HTML compilado com sucesso em: {output_path} ({len(html_template)} bytes, {len(findings)} achados integrados)"
+
+
+def compile_evolution_html(target_identifier: str, root_dir: str = None) -> dict:
+    """
+    Compila o painel HTML independente de Evolução e Controle de Versões da Análise (evolucao.html),
+    reunindo a tabela de versionamento, o sumário executivo de alterações e o diff detalhado entre rodadas.
+    Grava em analise/<lote>/<version>/evolucao.html e em <rodada>/relatorios/evolucao.html de cada rodada.
+    """
+    if root_dir is None:
+        root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+    analise_root = os.path.join(root_dir, 'analise')
+    clean_id = (target_identifier or "").strip().replace('\\', '/').strip('/')
+    if clean_id.startswith('analise/'):
+        clean_id = clean_id[len('analise/'):]
+
+    if not os.path.isdir(analise_root) or not clean_id:
+        return {"status": "error", "message": "Diretório de análises ou identificador inválido."}
+
+    def _find_run_dir(identifier: str) -> str | None:
+        c = (identifier or "").strip().replace('\\', '/').strip('/')
+        if c.startswith('analise/'):
+            c = c[len('analise/'):]
+        if not c:
+            return None
+        direct = os.path.join(analise_root, c)
+        if os.path.isfile(os.path.join(direct, 'relatorios', 'dados_analise.json')):
+            return direct
+        target_leaf = c.split('/')[-1]
+        for dirpath, _, filenames in os.walk(analise_root):
+            if os.path.basename(dirpath) == target_leaf and os.path.isfile(os.path.join(dirpath, 'relatorios', 'dados_analise.json')):
+                return dirpath
+        return None
+
+    candidate = os.path.join(analise_root, clean_id)
+    version_dir = None
+    lote_label = clean_id.split('/')[0]
+    version_label = ""
+
+    run_candidate = _find_run_dir(clean_id)
+    if run_candidate:
+        rel_run = os.path.relpath(run_candidate, analise_root).replace('\\', '/')
+        parts = rel_run.split('/')
+        if len(parts) >= 3:
+            version_dir = os.path.dirname(run_candidate)
+            lote_label = parts[0]
+            version_label = parts[1]
+        else:
+            version_dir = run_candidate
+            lote_label = parts[0]
+            version_label = "v1.0"
+    elif os.path.isdir(candidate):
+        has_direct_runs = any(
+            os.path.isfile(os.path.join(candidate, d, 'relatorios', 'dados_analise.json'))
+            for d in os.listdir(candidate)
+            if os.path.isdir(os.path.join(candidate, d))
+        )
+        if has_direct_runs:
+            version_dir = candidate
+            parts = clean_id.split('/')
+            lote_label = parts[0]
+            version_label = parts[1] if len(parts) >= 2 else "v1.0"
+        else:
+            sub_versions = sorted(
+                os.path.join(candidate, d)
+                for d in os.listdir(candidate)
+                if os.path.isdir(os.path.join(candidate, d))
+                and any(
+                    os.path.isfile(os.path.join(candidate, d, sub, 'relatorios', 'dados_analise.json'))
+                    for sub in os.listdir(os.path.join(candidate, d))
+                    if os.path.isdir(os.path.join(candidate, d, sub))
+                )
+            )
+            if sub_versions:
+                version_dir = sub_versions[-1]
+                lote_label = clean_id.split('/')[0]
+                version_label = os.path.basename(version_dir)
+
+    if not version_dir or not os.path.isdir(version_dir):
+        return {"status": "error", "message": f"Diretório de versão não localizado para: {target_identifier}"}
+
+    runs_by_real: dict[str, dict] = {}
+
+    def _register_run_dir(rdir: str) -> dict | None:
+        rreal = os.path.realpath(rdir)
+        if rreal in runs_by_real:
+            return runs_by_real[rreal]
+        json_p = os.path.join(rdir, 'relatorios', 'dados_analise.json')
+        if not os.path.isfile(json_p):
+            return None
+        try:
+            with open(json_p, 'r', encoding='utf-8') as f:
+                djson = json.load(f)
+        except Exception:
+            return None
+        rel_r = os.path.relpath(rdir, analise_root).replace('\\', '/')
+        leaf = os.path.basename(rdir)
+        info = {
+            "run_dir": rdir,
+            "rel_dir": os.path.join(rdir, 'relatorios'),
+            "index_abs": os.path.join(rdir, 'relatorios', 'index.html'),
+            "rel_from_analise": rel_r,
+            "leaf": leaf,
+            "data": djson,
+        }
+        runs_by_real[rreal] = info
+        return info
+
+    if os.path.isfile(os.path.join(version_dir, 'relatorios', 'dados_analise.json')):
+        _register_run_dir(version_dir)
+    else:
+        for entry in sorted(os.listdir(version_dir)):
+            sub_dir = os.path.join(version_dir, entry)
+            if os.path.isdir(sub_dir):
+                _register_run_dir(sub_dir)
+
+    # Inclui análises ancestrais referenciadas (mesmo se em caminho legado de 1 nível)
+    pending_parents = list(runs_by_real.values())
+    while pending_parents:
+        cur = pending_parents.pop(0)
+        djson = cur["data"]
+        ancestors = []
+        if djson.get("parent_analysis"):
+            ancestors.append(str(djson["parent_analysis"]))
+        vr_meta = djson.get("version_reconciliation")
+        if isinstance(vr_meta, dict) and vr_meta.get("versao_anterior"):
+            ancestors.append(str(vr_meta["versao_anterior"]))
+        for anc_id in ancestors:
+            anc_dir = _find_run_dir(anc_id)
+            if anc_dir and os.path.realpath(anc_dir) not in runs_by_real:
+                loaded = _register_run_dir(anc_dir)
+                if loaded:
+                    pending_parents.append(loaded)
+
+    runs = sorted(runs_by_real.values(), key=lambda r: (r["leaf"], r["rel_from_analise"]))
+    if not runs:
+        return {"status": "error", "message": "Nenhuma análise encontrada para compilar evolução."}
+
+    import audit_engine
+    latest_run = runs[-1]
+    latest_data = latest_run["data"]
+    if not version_label:
+        version_label = str(latest_data.get("metadata", {}).get("versao_documento") or "v1.0")
+    display_title = clean_unicode_text(str(latest_data.get("title") or lote_label.replace("_", " ")))
+
+    # Garante reconciliação entre a penúltima e a última versão se houver >= 2 rodadas
+    latest_vr = latest_data.get("version_reconciliation")
+    if (not isinstance(latest_vr, dict) or not latest_vr) and len(runs) >= 2:
+        latest_vr = audit_engine.reconcile_versions(runs[-2]["data"], latest_data)
+
+    # Coleta todas as reconciliações disponíveis em ordem cronológica (mais recente no topo)
+    reconciliations_seq = []
+    for idx in range(len(runs) - 1, 0, -1):
+        r_curr = runs[idx]
+        r_prev = runs[idx - 1]
+        vr_item = r_curr["data"].get("version_reconciliation")
+        if isinstance(vr_item, dict) and vr_item:
+            reconciliations_seq.append((idx, idx + 1, r_prev, r_curr, vr_item))
+        elif idx == len(runs) - 1 and isinstance(latest_vr, dict) and latest_vr:
+            reconciliations_seq.append((idx, idx + 1, r_prev, r_curr, latest_vr))
+
+    def _fmt_ts_date(ts_str: str) -> str:
+        leaf = (ts_str or "").split("/")[-1]
+        if len(leaf) >= 15 and leaf[:8].isdigit() and leaf[9:15].isdigit():
+            return f"{leaf[6:8]}/{leaf[4:6]}/{leaf[:4]} {leaf[9:11]}:{leaf[11:13]}:{leaf[13:15]}"
+        if len(leaf) >= 8 and leaf[:8].isdigit():
+            return f"{leaf[6:8]}/{leaf[4:6]}/{leaf[:4]}"
+        return ts_str or "—"
+
+    def _parecer_badge_html(parecer_txt: str) -> str:
+        up = (parecer_txt or "").upper()
+        if "NÃO APTO" in up:
+            cls = "crit-critica"
+        elif "PENDENTE" in up:
+            cls = "crit-alta"
+        elif "RESSALVA" in up:
+            cls = "crit-media"
+        else:
+            cls = "crit-baixa"
+        return f'<span class="badge-crit {cls}">{html.escape(str(parecer_txt or "—"))}</span>'
+
+    def _crit_badge_html(crit_txt: str) -> str:
+        low = (crit_txt or "").casefold()
+        cls = (
+            "crit-critica" if "crítica" in low or "critica" in low
+            else "crit-alta" if "alta" in low
+            else "crit-media" if "média" in low or "media" in low
+            else "crit-baixa"
+        )
+        return f'<span class="badge-crit {cls}">{html.escape(str(crit_txt or "Média"))}</span>'
+
+    def _render_evolution_for_dir(output_dir: str) -> str:
+        try:
+            master_href = os.path.relpath(os.path.join(analise_root, "index.html"), output_dir).replace("\\", "/")
+        except Exception:
+            master_href = "../../index.html"
+        try:
+            latest_report_href = os.path.relpath(latest_run["index_abs"], output_dir).replace("\\", "/")
+        except Exception:
+            latest_report_href = "./index.html"
+
+        # Seção 1: Tabela Master de Versionamento das Análises
+        version_rows_html = ""
+        for idx, run in enumerate(runs, 1):
+            d = run["data"]
+            k = d.get("kpis") or {}
+            confirmed_list = _confirmed_findings(d.get("findings") or [])
+            pendentes_n = int(k.get("achados_pendentes_adjudicacao", 0) or 0)
+            confirmados_n = int(k.get("achados_confirmados", len(confirmed_list)) or 0)
+            criticos_n = int(k.get("criticos", sum(1 for a in confirmed_list if str(a.get("criticidade", a.get("crit", ""))).casefold() in ("crítica", "critica"))) or 0)
+            altos_n = int(k.get("altos", sum(1 for a in confirmed_list if str(a.get("criticidade", a.get("crit", ""))).casefold() == "alta")) or 0)
+            lacunas_n = int(k.get("lacunas", len(d.get("lacunas") or [])) or 0)
+            perguntas_n = int(k.get("perguntas", len(d.get("esclarecimentos") or [])) or 0)
+            iqd_val = str(k.get("iqd", "—"))
+            parecer_val = str(d.get("parecer", "—"))
+
+            trail = d.get("audit_trail") or []
+            if idx == 1 and not trail:
+                origem_motivo = "Auditoria Inicial RTI (Baseline)"
+            elif trail and isinstance(trail[-1], dict):
+                origem_motivo = str(trail[-1].get("reason") or "Revisão Adjudicada")
+            else:
+                origem_motivo = "Rodada Evolutiva da Análise"
+
+            ext_inps = d.get("external_inputs") or []
+            if ext_inps:
+                ext_names = ", ".join(str(ei.get("name", "")) for ei in ext_inps[:2])
+                origem_motivo += f" (Insumo externo verificado: {ext_names})"
+
+            bfiles = d.get("baseline_files") or []
+            target_names = [
+                str(bf.get("name") or os.path.basename(str(bf.get("path", ""))))
+                for bf in bfiles
+                if bf.get("role", "alvo_principal") == "alvo_principal"
+            ] or [str(bf.get("name") or "") for bf in bfiles]
+            alvo_disp = ", ".join(target_names[:2]) if target_names else "—"
+            if len(target_names) > 2:
+                alvo_disp += f" (+{len(target_names) - 2})"
+
+            try:
+                run_href = os.path.relpath(run["index_abs"], output_dir).replace("\\", "/")
+            except Exception:
+                run_href = "./index.html"
+
+            rev_badge_style = "background:#dbeafe; color:#1e40af;" if idx == len(runs) else "background:#f1f5f9; color:#334155;"
+            current_tag = " (Atual)" if idx == len(runs) else ""
+
+            version_rows_html += f"""
+            <tr>
+                <td><span class="badge-crit" style="{rev_badge_style}"><strong>r{idx}{current_tag}</strong></span></td>
+                <td><code>{html.escape(run['leaf'])}</code><br><small style="color:var(--text-muted);">{html.escape(_fmt_ts_date(run['leaf']))}</small></td>
+                <td>{html.escape(origem_motivo)}</td>
+                <td><code>{html.escape(alvo_disp)}</code></td>
+                <td>{_parecer_badge_html(parecer_val)}</td>
+                <td><strong style="color:var(--primary);">{html.escape(iqd_val)}</strong></td>
+                <td><strong>{confirmados_n}</strong>{' <small>(pend: ' + str(pendentes_n) + ')</small>' if pendentes_n else ''}</td>
+                <td><strong style="color:var(--danger);">{criticos_n}</strong></td>
+                <td><strong style="color:var(--warning);">{altos_n}</strong></td>
+                <td>{lacunas_n}</td>
+                <td>{perguntas_n}</td>
+                <td><a href="{html.escape(run_href, quote=True)}" class="ssot-link"><i class="fa-solid fa-arrow-right-to-bracket"></i> Abrir Relatório</a></td>
+            </tr>"""
+
+        # Hero metrics
+        latest_kpis = latest_data.get("kpis") or {}
+        hero_iqd = html.escape(str(latest_kpis.get("iqd", "—")))
+        hero_parecer = str(latest_data.get("parecer", "—"))
+        hero_delta = html.escape(str((latest_vr or {}).get("delta_iqd", "—")))
+        hero_novos = int((latest_vr or {}).get("novos_achados_count", 0))
+        hero_refinados = int((latest_vr or {}).get("achados_refinados_count", len((latest_vr or {}).get("refinados", []))))
+        hero_sanados = int((latest_vr or {}).get("achados_sanados_count", 0))
+
+        # Seção 2 & 3: Sumário Executivo das Alterações e Diff Estruturado
+        transitions_html = ""
+        for prev_num, curr_num, r_prev, r_curr, vr in reconciliations_seq:
+            try:
+                curr_href = os.path.relpath(r_curr["index_abs"], output_dir).replace("\\", "/")
+            except Exception:
+                curr_href = latest_report_href
+
+            sumario_txt = html.escape(str(vr.get("sumario_alteracoes") or ""))
+            if not sumario_txt:
+                sumario_txt = html.escape(
+                    f"Comparação entre r{prev_num} e r{curr_num}: "
+                    f"{vr.get('novos_achados_count', 0)} novo(s) achado(s), "
+                    f"{vr.get('achados_refinados_count', 0)} refinado(s)/reancorado(s), "
+                    f"{vr.get('achados_sanados_count', 0)} saneado(s)/expurgado(s) e "
+                    f"variação de IQD {vr.get('delta_iqd', '—')}."
+                )
+
+            kcmp = vr.get("kpi_comparison") or {}
+            kpi_delta_rows = ""
+            if isinstance(kcmp, dict) and kcmp:
+                labels_map = [
+                    ("confirmados", "Achados Confirmados"),
+                    ("criticos", "Achados Críticos (P0)"),
+                    ("altos", "Achados Altos (P1)"),
+                    ("lacunas", "Lacunas Mapeadas"),
+                    ("perguntas", "Perguntas Formais (Q-XXX)"),
+                    ("iqd", "Índice IQD"),
+                ]
+                for key_k, lbl_k in labels_map:
+                    row_k = kcmp.get(key_k)
+                    if isinstance(row_k, dict):
+                        kpi_delta_rows += (
+                            f"<tr><td><strong>{lbl_k}</strong></td>"
+                            f"<td>{html.escape(str(row_k.get('anterior', '—')))}</td>"
+                            f"<td><strong>{html.escape(str(row_k.get('atual', '—')))}</strong></td>"
+                            f"<td><code>{html.escape(str(row_k.get('delta', '—')))}</code></td></tr>"
+                        )
+            else:
+                kpi_delta_rows = (
+                    f"<tr><td><strong>Total de Achados Ativos</strong></td><td>{vr.get('total_anteriores', 0)}</td><td><strong>{vr.get('total_atuais', 0)}</strong></td><td>—</td></tr>"
+                    f"<tr><td><strong>Índice IQD</strong></td><td>{html.escape(str(vr.get('iqd_anterior', '—')))}</td><td><strong>{html.escape(str(vr.get('iqd_atual', '—')))}</strong></td><td><code>{html.escape(str(vr.get('delta_iqd', '—')))}</code></td></tr>"
+                )
+
+            # Tabelas de mudanças detalhadas
+            novos_rows = ""
+            for item in vr.get("novos", []):
+                nid_raw = str(item.get("id_atual", "—"))
+                nid_esc = html.escape(nid_raw)
+                n_link = (
+                    f'<a href="{html.escape(curr_href, quote=True)}#card-{html.escape(nid_raw, quote=True)}" class="ssot-link">{nid_esc}</a>'
+                    if nid_raw != "—" else "—"
+                )
+                novos_rows += (
+                    f"<tr><td>{n_link}</td>"
+                    f"<td><strong>{html.escape(str(item.get('title') or item.get('titulo') or '—'))}</strong></td>"
+                    f"<td><code>{html.escape(str(item.get('doc_origem', '—')))}</code></td>"
+                    f"<td>{html.escape(str(item.get('loc') or item.get('localizacao') or '—'))}</td>"
+                    f"<td>{_crit_badge_html(item.get('criticidade', 'Média'))} <span class='badge-prio'>{html.escape(str(item.get('prioridade', 'P2')))}</span></td>"
+                    f"<td>{html.escape(str(item.get('evidencia', '—')))}</td></tr>"
+                )
+
+            ref_rows = ""
+            for item in vr.get("refinados", []):
+                rid_raw = str(item.get("id_atual", "—"))
+                rid_esc = html.escape(rid_raw)
+                r_link = (
+                    f'<a href="{html.escape(curr_href, quote=True)}#card-{html.escape(rid_raw, quote=True)}" class="ssot-link">{rid_esc}</a>'
+                    if rid_raw != "—" else "—"
+                )
+                doc_trans = f"{item.get('doc_anterior', '—')} → {item.get('doc_atual', item.get('doc_origem', '—'))}"
+                ref_rows += (
+                    f"<tr><td>{r_link}</td>"
+                    f"<td><strong>{html.escape(str(item.get('title') or item.get('titulo') or '—'))}</strong></td>"
+                    f"<td><code>{html.escape(doc_trans)}</code></td>"
+                    f"<td>{html.escape(str(item.get('detalhe_refinamento') or 'Refinamento de evidência'))}</td>"
+                    f"<td>{_crit_badge_html(item.get('criticidade', 'Média'))}</td></tr>"
+                )
+
+            san_items = vr.get("expurgados_escopo") or []
+            san_ids_seen = {item.get("id_anterior") for item in san_items}
+            combined_removed = list(san_items) + [item for item in vr.get("sanados", []) if item.get("id_anterior") not in san_ids_seen]
+            rem_rows = ""
+            for item in combined_removed:
+                motivo_raw = item.get("justificativa") or (
+                    "Expurgado por foco de escopo (documento de apoio)" if item.get("motivo_saida") == "expurgado_escopo"
+                    else "Saneado / não presente na versão atual"
+                )
+                rem_rows += (
+                    f"<tr><td><code>{html.escape(str(item.get('id_anterior', '—')))}</code></td>"
+                    f"<td>{html.escape(str(item.get('title') or item.get('titulo') or '—'))}</td>"
+                    f"<td><code>{html.escape(str(item.get('doc_origem', '—')))}</code></td>"
+                    f"<td>{_crit_badge_html(item.get('criticidade', 'Média'))}</td>"
+                    f"<td>{html.escape(str(motivo_raw))}</td></tr>"
+                )
+
+            pers_items = [item for item in vr.get("reincidentes", []) if not item.get("foi_refinado")]
+            pers_rows = ""
+            for item in pers_items:
+                pid_ant = html.escape(str(item.get("id_anterior", "—")))
+                pid_atu_raw = str(item.get("id_atual", "—"))
+                p_link = (
+                    f'<a href="{html.escape(curr_href, quote=True)}#card-{html.escape(pid_atu_raw, quote=True)}" class="ssot-link">{html.escape(pid_atu_raw)}</a>'
+                    if pid_atu_raw != "—" else "—"
+                )
+                pers_rows += (
+                    f"<tr><td><code>{pid_ant}</code> → {p_link}</td>"
+                    f"<td>{html.escape(str(item.get('title') or item.get('titulo') or '—'))}</td>"
+                    f"<td>{_crit_badge_html(item.get('criticidade', 'Média'))}</td>"
+                    f"<td>{html.escape(str(item.get('loc_atual') or item.get('localizacao_atual') or '—'))}</td></tr>"
+                )
+
+            # Seção 4 opcional: Disposição de Insumos Externos
+            ext_disp_html = ""
+            ext_disp = vr.get("rastreabilidade_insumos_externos") or []
+            if ext_disp:
+                ext_d_rows = ""
+                for ed in ext_disp:
+                    ed_item = html.escape(str(ed.get("item_externo") or ed.get("codigo") or "—"))
+                    ed_tema = html.escape(str(ed.get("tema") or ed.get("titulo") or "—"))
+                    ed_status_raw = str(ed.get("status") or "Verificado")
+                    ed_st_cf = ed_status_raw.casefold()
+                    ed_cls = (
+                        "crit-baixa" if "incorporad" in ed_st_cf
+                        else "crit-media" if "cobert" in ed_st_cf or "enriquec" in ed_st_cf
+                        else "crit-critica" if "descart" in ed_st_cf or "rejeit" in ed_st_cf or "não" in ed_st_cf
+                        else "crit-info"
+                    )
+                    fid_ref = str(ed.get("achado_id") or "").strip()
+                    fid_cell = (
+                        f'<a href="{html.escape(curr_href, quote=True)}#card-{html.escape(fid_ref, quote=True)}" class="ssot-link">{html.escape(fid_ref)}</a>'
+                        if fid_ref and fid_ref != "—" else "—"
+                    )
+                    ed_just = html.escape(str(ed.get("justificativa") or "—"))
+                    ext_d_rows += (
+                        f"<tr><td><code>{ed_item}</code></td><td>{ed_tema}</td>"
+                        f"<td><span class='badge-crit {ed_cls}'>{html.escape(ed_status_raw)}</span></td>"
+                        f"<td>{fid_cell}</td><td>{ed_just}</td></tr>"
+                    )
+                ext_disp_html = f"""
+                <section class="section-card" id="insumos-externos-r{curr_num}">
+                    <div class="section-header">
+                        <div class="section-icon"><i class="fa-solid fa-magnifying-glass"></i></div>
+                        <h2 class="section-title">Auditoria Cruzada de Insumos Externos (r{prev_num} → r{curr_num})</h2>
+                    </div>
+                    <div class="ssot-intro-note">
+                        <i class="fa-solid fa-triangle-exclamation"></i> <strong>Regra de Custódia:</strong> Relatórios complementares externos não constituem fonte de verdade. Cada apontamento externo abaixo foi confrontado diretamente contra a baseline normativa congelada antes de qualquer decisão.
+                    </div>
+                    <div class="table-responsive">
+                        <table class="rpt-table">
+                            <thead>
+                                <tr>
+                                    <th>Item Externo</th>
+                                    <th>Tema / Hipótese Verificada</th>
+                                    <th>Decisão FCA-ENG-001</th>
+                                    <th>Achado Vinculado</th>
+                                    <th>Evidência na Baseline / Justificativa</th>
+                                </tr>
+                            </thead>
+                            <tbody>{ext_d_rows}</tbody>
+                        </table>
+                    </div>
+                </section>"""
+
+            transitions_html += f"""
+            <section class="section-card" id="sumario-r{prev_num}-r{curr_num}">
+                <div class="section-header">
+                    <div class="section-icon"><i class="fa-solid fa-code-compare"></i></div>
+                    <h2 class="section-title">Sumário Executivo de Alterações: r{prev_num} → r{curr_num}</h2>
+                </div>
+                <div class="ssot-intro-note">
+                    <strong>Resumo das Mudanças Incorporadas:</strong> {sumario_txt}
+                </div>
+                <div class="table-responsive">
+                    <table class="rpt-table">
+                        <thead>
+                            <tr>
+                                <th>Indicador</th>
+                                <th>Versão Anterior (r{prev_num})</th>
+                                <th>Nova Versão (r{curr_num})</th>
+                                <th>Variação (Δ)</th>
+                            </tr>
+                        </thead>
+                        <tbody>{kpi_delta_rows}</tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="section-card" id="diff-r{prev_num}-r{curr_num}">
+                <div class="section-header">
+                    <div class="section-icon"><i class="fa-solid fa-table-list"></i></div>
+                    <h2 class="section-title">Detalhamento das Alterações Incorporadas (r{prev_num} → r{curr_num})</h2>
+                </div>
+
+                <h3 style="margin-top:10px; color:#047857;">🟢 Novos Achados Incorporados na Versão r{curr_num} ({len(vr.get('novos', []))})</h3>
+                <div class="table-responsive">
+                    <table class="rpt-table">
+                        <thead>
+                            <tr><th>ID</th><th>Título</th><th>Documento-Alvo</th><th>Localização</th><th>Severidade</th><th>Evidência</th></tr>
+                        </thead>
+                        <tbody>{novos_rows or '<tr><td colspan="6">Nenhum novo achado adicionado nesta transição.</td></tr>'}</tbody>
+                    </table>
+                </div>
+
+                <h3 style="margin-top:26px; color:#1d4ed8;">🔵 Achados Refinados ou Reancorados no Documento-Alvo ({len(vr.get('refinados', []))})</h3>
+                <div class="table-responsive">
+                    <table class="rpt-table">
+                        <thead>
+                            <tr><th>ID</th><th>Título</th><th>Transição de Escopo</th><th>O que foi Ajustado</th><th>Criticidade</th></tr>
+                        </thead>
+                        <tbody>{ref_rows or '<tr><td colspan="5">Nenhum achado refinado/reancorado nesta transição.</td></tr>'}</tbody>
+                    </table>
+                </div>
+
+                <h3 style="margin-top:26px; color:#b45309;">🧹 Achados Saneados ou Expurgados por Foco de Escopo ({len(combined_removed)})</h3>
+                <div class="table-responsive">
+                    <table class="rpt-table">
+                        <thead>
+                            <tr><th>ID Anterior</th><th>Título</th><th>Documento Anterior</th><th>Criticidade</th><th>Motivo / Justificativa</th></tr>
+                        </thead>
+                        <tbody>{rem_rows or '<tr><td colspan="5">Nenhum achado removido nesta transição.</td></tr>'}</tbody>
+                    </table>
+                </div>
+
+                <details style="margin-top:24px;">
+                    <summary style="cursor:pointer; font-weight:700; color:var(--secondary);">🟡 Achados Persistentes Mantidos Inalterados ({len(pers_items)})</summary>
+                    <div class="table-responsive" style="margin-top:10px;">
+                        <table class="rpt-table">
+                            <thead><tr><th>ID Anterior → ID Atual</th><th>Título</th><th>Criticidade</th><th>Localização</th></tr></thead>
+                            <tbody>{pers_rows or '<tr><td colspan="4">Nenhum achado persistente inalterado nesta transição.</td></tr>'}</tbody>
+                        </table>
+                    </div>
+                </details>
+            </section>
+            {ext_disp_html}"""
+
+        if not transitions_html:
+            transitions_html = """
+            <section class="section-card" id="sumario-unico">
+                <div class="section-header">
+                    <div class="section-icon"><i class="fa-solid fa-code-compare"></i></div>
+                    <h2 class="section-title">Sumário de Versionamento</h2>
+                </div>
+                <div class="ssot-intro-note">
+                    Esta versão do lote possui atualmente uma única rodada registrada. Novas rodadas ou reconciliações aparecerão comparadas automaticamente aqui.
+                </div>
+            </section>"""
+
+        return f"""<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Evolução de Versões — {html.escape(display_title)}</title>
+    <style>
+        :root {{
+            --primary: #005ca9;
+            --primary-dark: #004077;
+            --primary-light: #e6f0fa;
+            --secondary: #0f172a;
+            --accent: #f59e0b;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+            --success: #10b981;
+            --bg-body: #f8fafc;
+            --bg-card: #ffffff;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --border: #e2e8f0;
+            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.07), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }}
+        * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+        body {{ font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg-body); color: var(--text-main); line-height: 1.65; font-size: 14px; }}
+        h1, h2, h3, h4 {{ font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: var(--secondary); font-weight: 700; }}
+        .fa-solid {{ display: inline-block; font-style: normal; line-height: 1; vertical-align: middle; }}
+        .fa-shield-halved::before {{ content: "🛡"; }}
+        .fa-house::before {{ content: "🏠"; }}
+        .fa-print::before {{ content: "⎙"; }}
+        .fa-code-compare::before {{ content: "⇄"; }}
+        .fa-chart-column::before {{ content: "📊"; }}
+        .fa-table-list::before {{ content: "▦"; }}
+        .fa-arrow-right-to-bracket::before {{ content: "→"; }}
+        .fa-magnifying-glass::before {{ content: "🔍"; }}
+        .fa-triangle-exclamation::before {{ content: "⚠"; }}
+        .fa-folder-open::before {{ content: "📁"; }}
+        .top-navbar {{ position: sticky; top: 0; z-index: 1000; background: rgba(15, 23, 42, 0.96); color: #ffffff; padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 10px rgba(0,0,0,0.15); }}
+        .brand-title {{ display: flex; align-items: center; gap: 12px; font-size: 1.05rem; font-weight: 700; }}
+        .actions-group {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
+        .btn-action {{ background: var(--primary); color: #ffffff; border: none; padding: 8px 14px; border-radius: 6px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-size: 0.85rem; text-decoration: none; }}
+        .btn-print {{ background: #059669; }}
+        .wrap {{ max-width: 1440px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 24px; }}
+        .hero-card {{ background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #ffffff; border-radius: 16px; padding: 28px; box-shadow: var(--shadow-lg); }}
+        .hero-tag {{ display: inline-block; background: rgba(167, 139, 250, 0.2); color: #c4b5fd; padding: 4px 12px; border-radius: 20px; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; margin-bottom: 8px; border: 1px solid rgba(167, 139, 250, 0.35); }}
+        .hero-title {{ color: #ffffff; font-size: 1.7rem; margin-bottom: 6px; }}
+        .hero-meta {{ color: #94a3b8; font-size: 0.9rem; margin-bottom: 18px; }}
+        .metrics-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-top: 16px; }}
+        .metric-card {{ background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; padding: 14px; }}
+        .metric-label {{ font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; font-weight: 600; }}
+        .metric-val {{ font-size: 1.4rem; font-weight: 800; color: #ffffff; }}
+        .metric-val.green {{ color: #34d399; }}
+        .metric-val.amber {{ color: #fbbf24; }}
+        .metric-val.red {{ color: #f87171; }}
+        .section-card {{ background: var(--bg-card); border-radius: 16px; padding: 24px; border: 1px solid var(--border); box-shadow: var(--shadow); }}
+        .section-header {{ display: flex; align-items: center; gap: 12px; margin-bottom: 18px; padding-bottom: 10px; border-bottom: 2px solid var(--primary-light); }}
+        .section-icon {{ width: 36px; height: 36px; background: var(--primary-light); color: var(--primary); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; }}
+        .section-title {{ font-size: 1.25rem; color: var(--secondary); margin: 0; }}
+        .ssot-intro-note {{ background: #e0f2fe; color: #0369a1; border: 1px solid #7dd3fc; padding: 10px 14px; border-radius: 8px; font-size: 0.88rem; margin-bottom: 14px; }}
+        .ssot-link {{ color: var(--primary); font-weight: 700; text-decoration: none; background: var(--primary-light); padding: 3px 8px; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px; }}
+        .ssot-link:hover {{ background: var(--primary); color: #ffffff; }}
+        .table-responsive {{ overflow-x: auto; margin-top: 10px; }}
+        .rpt-table {{ width: 100%; border-collapse: collapse; font-size: 0.83rem; }}
+        .rpt-table th, .rpt-table td {{ padding: 8px 12px; border: 1px solid var(--border); text-align: left; vertical-align: top; }}
+        .rpt-table th {{ background: #f1f5f9; font-weight: 700; color: var(--secondary); }}
+        .rpt-table tr:nth-child(even) {{ background: #f8fafc; }}
+        .badge-crit {{ font-size: 0.72rem; font-weight: 700; padding: 3px 8px; border-radius: 6px; text-transform: uppercase; display: inline-block; }}
+        .crit-critica {{ background: #fee2e2; color: #b91c1c; }}
+        .crit-alta {{ background: #ffedd5; color: #c2410c; }}
+        .crit-media {{ background: #fef9c3; color: #a16207; }}
+        .crit-baixa {{ background: #dcfce7; color: #15803d; }}
+        .crit-info {{ background: #e0f2fe; color: #0369a1; }}
+        .badge-prio {{ background: #e2e8f0; color: #334155; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: 700; }}
+        @media print {{ .top-navbar {{ display: none !important; }} .wrap {{ padding: 0; max-width: 100%; }} }}
+    </style>
+</head>
+<body>
+    <header class="top-navbar">
+        <div class="brand-title">
+            <i class="fa-solid fa-code-compare"></i>
+            <span>FCA-ENG-001 · Evolução e Controle de Versões da Análise</span>
+        </div>
+        <div class="actions-group">
+            <a href="{html.escape(latest_report_href, quote=True)}" class="btn-action" style="background:#7c3aed;"><i class="fa-solid fa-chart-column"></i> Relatório Técnico Atual (r{len(runs)})</a>
+            <a href="{html.escape(master_href, quote=True)}" class="btn-action"><i class="fa-solid fa-house"></i> Central Master</a>
+            <button class="btn-action btn-print" onclick="window.print()"><i class="fa-solid fa-print"></i> Imprimir / PDF</button>
+        </div>
+    </header>
+
+    <main class="wrap">
+        <section class="hero-card">
+            <span class="hero-tag"><i class="fa-solid fa-folder-open"></i> Controle de Versionamento Independente · {html.escape(str(lote_label))}</span>
+            <h1 class="hero-title">Evolução das Análises Técnicas ({html.escape(str(version_label))})</h1>
+            <div class="hero-meta">
+                <span>Lote: <strong>{html.escape(display_title)}</strong></span> &nbsp;|&nbsp;
+                <span>Versão Documental: <code>{html.escape(str(version_label))}</code></span> &nbsp;|&nbsp;
+                <span>Parecer Atual (r{len(runs)}): <strong>{html.escape(hero_parecer)}</strong></span>
+            </div>
+            <div class="metrics-grid">
+                <div class="metric-card"><div class="metric-label">Versões da Análise</div><div class="metric-val">{len(runs)}</div></div>
+                <div class="metric-card"><div class="metric-label">IQD Atual</div><div class="metric-val green">{hero_iqd}</div></div>
+                <div class="metric-card"><div class="metric-label">Variação IQD (Δ)</div><div class="metric-val">{hero_delta}</div></div>
+                <div class="metric-card"><div class="metric-label">Novos Achados</div><div class="metric-val red">{hero_novos}</div></div>
+                <div class="metric-card"><div class="metric-label">Refinados / Reancorados</div><div class="metric-val amber">{hero_refinados}</div></div>
+                <div class="metric-card"><div class="metric-label">Saneados / Expurgados</div><div class="metric-val">{hero_sanados}</div></div>
+            </div>
+        </section>
+
+        <section class="section-card" id="tabela-versionamento">
+            <div class="section-header">
+                <div class="section-icon"><i class="fa-solid fa-table-list"></i></div>
+                <h2 class="section-title">Tabela Master de Versionamento das Análises</h2>
+            </div>
+            <div class="table-responsive">
+                <table class="rpt-table">
+                    <thead>
+                        <tr>
+                            <th>Versão</th>
+                            <th>Timestamp / Data</th>
+                            <th>Origem / Motivo da Versão</th>
+                            <th>Documento-Alvo Principal</th>
+                            <th>Parecer</th>
+                            <th>IQD</th>
+                            <th>Confirmados</th>
+                            <th>P0 / Críticos</th>
+                            <th>P1 / Altos</th>
+                            <th>Lacunas</th>
+                            <th>Perguntas</th>
+                            <th>Relatório</th>
+                        </tr>
+                    </thead>
+                    <tbody>{version_rows_html}</tbody>
+                </table>
+            </div>
+        </section>
+
+        {transitions_html}
+    </main>
+</body>
+</html>"""
+
+    written_run_files = []
+    version_evo_rel = None
+    if os.path.realpath(version_dir) != os.path.realpath(analise_root) and not os.path.isfile(os.path.join(version_dir, 'relatorios', 'dados_analise.json')):
+        version_evo_abs = os.path.join(version_dir, "evolucao.html")
+        with open(version_evo_abs, "w", encoding="utf-8") as f:
+            f.write(_render_evolution_for_dir(version_dir))
+        version_evo_rel = os.path.relpath(version_evo_abs, analise_root).replace("\\", "/")
+
+    for run in runs:
+        r_dir = run["rel_dir"]
+        if os.path.isdir(r_dir):
+            run_evo_abs = os.path.join(r_dir, "evolucao.html")
+            with open(run_evo_abs, "w", encoding="utf-8") as f:
+                f.write(_render_evolution_for_dir(r_dir))
+            run_evo_rel = os.path.relpath(run_evo_abs, analise_root).replace("\\", "/")
+            written_run_files.append(run_evo_rel)
+            if version_evo_rel is None:
+                version_evo_rel = run_evo_rel
+
+    return {
+        "status": "success",
+        "version_dir": os.path.relpath(version_dir, analise_root).replace("\\", "/"),
+        "evolution_html": version_evo_rel,
+        "run_evolution_files": written_run_files,
+        "total_versions": len(runs),
+    }
 
 
 if __name__ == "__main__":

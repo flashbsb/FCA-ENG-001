@@ -337,24 +337,48 @@ def detect_document_versions(filenames: list[str]) -> dict:
     return groups
 
 
-def reconcile_versions(json_antigo: dict, json_novo: dict) -> dict:
+def reconcile_versions(
+    json_antigo: dict,
+    json_novo: dict,
+    summary_notes: str = "",
+    external_audit_disposition: list[dict] = None,
+) -> dict:
     """
     Confronta a base de auditoria de uma versão anterior com a versão nova do mesmo lote/documento.
-    Classifica os achados em:
-      - Sanados (resolvidos na nova versão)
-      - Reincidentes (persistem sem correção)
+    Classifica os achados ativos em:
+      - Sanados / Expurgados (resolvidos ou removidos por foco de escopo na nova versão)
+      - Reincidentes (persistem entre versões, destacando os Refinados/Reancorados)
       - Novos (introduzidos na nova versão)
-    Calcula taxa de resolução e delta de IQD.
+    Calcula taxa de resolução, comparativo de KPIs, sumário de alterações e delta de IQD.
     """
-    findings_antigos = json_antigo.get("findings", [])
-    findings_novos = json_novo.get("findings", [])
+    raw_antigos = json_antigo.get("findings", []) or []
+    raw_novos = json_novo.get("findings", []) or []
+
+    def _adj_info(item: dict) -> tuple[str, str]:
+        adj = item.get("adjudication")
+        if isinstance(adj, dict):
+            return str(adj.get("status") or item.get("adjudication_status") or ""), str(adj.get("rationale") or "")
+        return str(item.get("adjudication_status") or ""), ""
+
+    def _active_findings(raw: list[dict]) -> list[dict]:
+        has_confirmed = any(_adj_info(item)[0] == "confirmado" for item in raw)
+        has_any_adj = any(_adj_info(item)[0] for item in raw)
+        if has_confirmed or has_any_adj:
+            return [item for item in raw if _adj_info(item)[0] == "confirmado"]
+        return list(raw)
+
+    findings_antigos = _active_findings(raw_antigos)
+    findings_novos = _active_findings(raw_novos)
+    raw_novos_by_id = {str(fn.get("id", "")): fn for fn in raw_novos if fn.get("id")}
 
     def _simplify(s: str) -> str:
-        s = s.lower()
+        s = (s or "").lower()
         return re.sub(r'[^a-z0-9]', '', s)
 
     reincidentes = []
+    refinados = []
     sanados = []
+    expurgados_escopo = []
     novos = []
     matched_new_ids = set()
 
@@ -364,6 +388,7 @@ def reconcile_versions(json_antigo: dict, json_novo: dict) -> dict:
         fa_tit = _simplify(fa_tit_raw)
         fa_cat = fa.get("categoria") or fa.get("cat") or ""
         fa_loc = fa.get("loc") or fa.get("localizacao") or ""
+        fa_doc = str(fa.get("doc_origem") or fa.get("documento") or "—")
 
         matched_fn = None
         for fn in findings_novos:
@@ -374,14 +399,14 @@ def reconcile_versions(json_antigo: dict, json_novo: dict) -> dict:
             fn_tit = _simplify(fn_tit_raw)
             fn_cat = fn.get("categoria") or fn.get("cat") or ""
 
-            # Match por ID direto ou por similaridade forte de título na mesma categoria
+            prev_ref_match = bool(fa_id and fn.get("previous_finding_id") and fn.get("previous_finding_id") == fa_id)
             id_match = bool(fa_id and fn_id and fa_id == fn_id)
             title_match = bool(
                 fa_cat and fn_cat and fa_cat == fn_cat
                 and fa_tit and fn_tit
                 and (fa_tit in fn_tit or fn_tit in fa_tit)
             )
-            if id_match or title_match:
+            if prev_ref_match or id_match or title_match:
                 matched_fn = fn
                 matched_new_ids.add(fn_id)
                 break
@@ -389,11 +414,32 @@ def reconcile_versions(json_antigo: dict, json_novo: dict) -> dict:
         if matched_fn:
             fn_tit_raw = matched_fn.get("title") or matched_fn.get("titulo") or fa_tit_raw
             fn_loc = matched_fn.get("loc") or matched_fn.get("localizacao") or ""
-            reincidentes.append({
+            fn_doc = str(matched_fn.get("doc_origem") or matched_fn.get("documento") or fa_doc)
+
+            changes = []
+            if fa_doc and fn_doc and fa_doc != fn_doc:
+                changes.append(f"Reancorado de `{fa_doc}` para `{fn_doc}`")
+            if fa_tit_raw != fn_tit_raw:
+                changes.append("Título refinado")
+            fa_fato = str(fa.get("fato") or "").strip()
+            fn_fato = str(matched_fn.get("fato") or "").strip()
+            if fa_fato and fn_fato and fa_fato != fn_fato:
+                changes.append("Descrição factual/evidências enriquecidas")
+            fa_evs = len(fa.get("evidence_sources") or [])
+            fn_evs = len(matched_fn.get("evidence_sources") or [])
+            if fn_evs > fa_evs:
+                changes.append(f"Fontes de evidência ampliadas ({fa_evs} → {fn_evs})")
+            foi_refinado = bool(changes)
+            detalhe_refinamento = "; ".join(changes)
+
+            entry = {
                 "id_anterior": fa_id,
                 "id_atual": matched_fn.get("id", ""),
                 "title": fn_tit_raw,
                 "titulo": fn_tit_raw,
+                "doc_origem": fn_doc,
+                "doc_anterior": fa_doc,
+                "doc_atual": fn_doc,
                 "criticidade": matched_fn.get("criticidade", matched_fn.get("crit", "Média")),
                 "prioridade": matched_fn.get("prioridade", matched_fn.get("prio", "P2")),
                 "categoria": matched_fn.get("categoria", matched_fn.get("cat", fa_cat)),
@@ -401,20 +447,37 @@ def reconcile_versions(json_antigo: dict, json_novo: dict) -> dict:
                 "loc_atual": fn_loc,
                 "localizacao_anterior": fa_loc,
                 "localizacao_atual": fn_loc,
+                "foi_refinado": foi_refinado,
+                "detalhe_refinamento": detalhe_refinamento,
                 "status": "reincidente"
-            })
+            }
+            reincidentes.append(entry)
+            if foi_refinado:
+                refinados.append(entry)
         else:
-            sanados.append({
+            fn_excl = raw_novos_by_id.get(fa_id)
+            excl_st, excl_rationale = _adj_info(fn_excl) if fn_excl else ("", "")
+            is_scope_expunged = excl_st in ("fora_de_escopo", "falso_positivo", "duplicado")
+            motivo_saida = "expurgado_escopo" if is_scope_expunged else "saneado_na_baseline"
+            san_entry = {
                 "id_anterior": fa_id,
+                "id_atual": fn_excl.get("id", fa_id) if fn_excl else "",
                 "title": fa_tit_raw,
                 "titulo": fa_tit_raw,
+                "doc_origem": fa_doc,
                 "criticidade": fa.get("criticidade", fa.get("crit", "Média")),
                 "prioridade": fa.get("prioridade", fa.get("prio", "P2")),
                 "categoria": fa_cat,
                 "loc": fa_loc,
                 "localizacao": fa_loc,
+                "motivo_saida": motivo_saida,
+                "status_adjudicacao": excl_st,
+                "justificativa": excl_rationale,
                 "status": "sanado"
-            })
+            }
+            sanados.append(san_entry)
+            if is_scope_expunged:
+                expurgados_escopo.append(san_entry)
 
     for fn in findings_novos:
         fn_id = fn.get("id", "")
@@ -425,9 +488,12 @@ def reconcile_versions(json_antigo: dict, json_novo: dict) -> dict:
                 "id_atual": fn_id,
                 "title": fn_tit_raw,
                 "titulo": fn_tit_raw,
+                "doc_origem": str(fn.get("doc_origem") or fn.get("documento") or "—"),
                 "criticidade": fn.get("criticidade", fn.get("crit", "Média")),
                 "prioridade": fn.get("prioridade", fn.get("prio", "P2")),
                 "categoria": fn.get("categoria", fn.get("cat", "")),
+                "evidencia": fn.get("evidencia") or fn.get("evid") or "—",
+                "origem_verificacao": str(fn.get("origin_note") or fn.get("rule_id") or "—"),
                 "loc": fn_loc,
                 "localizacao": fn_loc,
                 "status": "novo"
@@ -437,12 +503,16 @@ def reconcile_versions(json_antigo: dict, json_novo: dict) -> dict:
     total_novo = len(findings_novos)
     n_sanados = len(sanados)
     n_reincidentes = len(reincidentes)
+    n_refinados = len(refinados)
+    n_expurgados = len(expurgados_escopo)
     n_novos = len(novos)
 
     taxa_resolucao = round((n_sanados / total_ant * 100), 1) if total_ant > 0 else 100.0
 
-    iqd_ant_str = str(json_antigo.get("kpis", {}).get("iqd", "0%"))
-    iqd_novo_str = str(json_novo.get("kpis", {}).get("iqd", "0%"))
+    kpis_ant = json_antigo.get("kpis", {}) or {}
+    kpis_novo = json_novo.get("kpis", {}) or {}
+    iqd_ant_str = str(kpis_ant.get("iqd", "0%"))
+    iqd_novo_str = str(kpis_novo.get("iqd", "0%"))
 
     try:
         iqd_ant_num = float(re.sub(r'[^0-9.]', '', iqd_ant_str))
@@ -452,13 +522,45 @@ def reconcile_versions(json_antigo: dict, json_novo: dict) -> dict:
     except Exception:
         delta_iqd_str = "—"
 
+    v_ant = json_antigo.get("timestamp", "anterior")
+    v_atu = json_novo.get("timestamp", "atual")
+    auto_summary = (
+        f"Evolução da análise de {v_ant} para {v_atu}: {n_novos} novo(s) achado(s) incorporado(s), "
+        f"{n_refinados} achado(s) refinado(s)/reancorado(s), {n_sanados} achado(s) removido(s) "
+        f"({n_expurgados} expurgado(s) por foco de escopo) e {n_reincidentes} achado(s) mantido(s). "
+        f"IQD: {iqd_ant_str} → {iqd_novo_str} ({delta_iqd_str})."
+    )
+
+    def _int_kpi(kdict: dict, key: str, default: int = 0) -> int:
+        try:
+            return int(kdict.get(key, default) or 0)
+        except (TypeError, ValueError):
+            return default
+
+    ant_conf = _int_kpi(kpis_ant, "achados_confirmados", total_ant)
+    novo_conf = _int_kpi(kpis_novo, "achados_confirmados", total_novo)
+    ant_crit = _int_kpi(kpis_ant, "criticos", 0)
+    novo_crit = _int_kpi(kpis_novo, "criticos", 0)
+    ant_alt = _int_kpi(kpis_ant, "altos", 0)
+    novo_alt = _int_kpi(kpis_novo, "altos", 0)
+    ant_lac = _int_kpi(kpis_ant, "lacunas", 0)
+    novo_lac = _int_kpi(kpis_novo, "lacunas", 0)
+    ant_perg = _int_kpi(kpis_ant, "perguntas", 0)
+    novo_perg = _int_kpi(kpis_novo, "perguntas", 0)
+
+    def _delta_int(a: int, b: int) -> str:
+        d = b - a
+        return f"{'+' if d > 0 else ''}{d}"
+
     return {
-        "versao_anterior": json_antigo.get("timestamp", "anterior"),
-        "versao_atual": json_novo.get("timestamp", "atual"),
+        "versao_anterior": v_ant,
+        "versao_atual": v_atu,
         "total_anteriores": total_ant,
         "total_atuais": total_novo,
         "achados_sanados_count": n_sanados,
+        "achados_expurgados_escopo_count": n_expurgados,
         "achados_reincidentes_count": n_reincidentes,
+        "achados_refinados_count": n_refinados,
         "novos_achados_count": n_novos,
         "taxa_resolucao_pct": taxa_resolucao,
         "iqd_anterior": iqd_ant_str,
@@ -466,9 +568,21 @@ def reconcile_versions(json_antigo: dict, json_novo: dict) -> dict:
         "delta_iqd": delta_iqd_str,
         "parecer_anterior": json_antigo.get("parecer_badge", json_antigo.get("parecer", "—")),
         "parecer_atual": json_novo.get("parecer_badge", json_novo.get("parecer", "—")),
+        "sumario_alteracoes": summary_notes.strip() if summary_notes and summary_notes.strip() else auto_summary,
+        "kpi_comparison": {
+            "confirmados": {"anterior": ant_conf, "atual": novo_conf, "delta": _delta_int(ant_conf, novo_conf)},
+            "criticos": {"anterior": ant_crit, "atual": novo_crit, "delta": _delta_int(ant_crit, novo_crit)},
+            "altos": {"anterior": ant_alt, "atual": novo_alt, "delta": _delta_int(ant_alt, novo_alt)},
+            "lacunas": {"anterior": ant_lac, "atual": novo_lac, "delta": _delta_int(ant_lac, novo_lac)},
+            "perguntas": {"anterior": ant_perg, "atual": novo_perg, "delta": _delta_int(ant_perg, novo_perg)},
+            "iqd": {"anterior": iqd_ant_str, "atual": iqd_novo_str, "delta": delta_iqd_str},
+        },
         "sanados": sanados,
+        "expurgados_escopo": expurgados_escopo,
         "reincidentes": reincidentes,
-        "novos": novos
+        "refinados": refinados,
+        "novos": novos,
+        "rastreabilidade_insumos_externos": list(external_audit_disposition or []),
     }
 
 
