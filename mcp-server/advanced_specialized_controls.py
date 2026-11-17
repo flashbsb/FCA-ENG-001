@@ -3,13 +3,16 @@ from __future__ import annotations
 
 import re
 
+from audit_pipeline import strip_non_normative_comments
 from specialized_controls import _finding
+
+TEXTUAL_DOC_EXTS = (".pdf", ".docx", ".pptx", ".odt", ".txt", ".md", ".html", ".htm", ".xml")
 
 
 def analyze_hld(documents: list[dict]) -> list[dict]:
     findings = []
     for doc in documents:
-        if doc.get("ext") not in (".pdf", ".docx", ".txt", ".md"):
+        if doc.get("ext") not in TEXTUAL_DOC_EXTS:
             continue
         text = doc.get("text", "")
         hld_rx = r"\b(?:hld|high\s+level\s+design|arquitetura\s+(?:de\s+)?alto\s+n[ií]vel)\b"
@@ -57,7 +60,7 @@ def analyze_integrations(documents: list[dict]) -> list[dict]:
     """Verificações documentais para interfaces que o próprio lote declara."""
     findings = []
     for doc in documents:
-        if doc.get("ext") not in (".pdf", ".docx", ".txt", ".md"):
+        if doc.get("ext") not in TEXTUAL_DOC_EXTS:
             continue
         text = doc.get("text", "")
         trigger = re.search(r"\b(?:api|rest|soap|webhook|esb|barramento|kafka|integra[cç][aã]o)\b", text, re.I)
@@ -79,7 +82,7 @@ def analyze_lgpd(documents: list[dict]) -> list[dict]:
     """Lacunas documentais de privacidade, sem emitir interpretação jurídica."""
     findings = []
     for doc in documents:
-        if doc.get("ext") not in (".pdf", ".docx", ".txt", ".md"):
+        if doc.get("ext") not in TEXTUAL_DOC_EXTS:
             continue
         text = doc.get("text", "")
         trigger = re.search(r"\b(?:lgpd|dados\s+pessoais|cpf|rg|biom[eé]tric|dados\s+de\s+sa[uú]de|anpd|dpo|privacidade|titular(?:es)?)\b", text, re.I)
@@ -101,7 +104,7 @@ def analyze_lgpd(documents: list[dict]) -> list[dict]:
 def analyze_cloud(documents: list[dict]) -> list[dict]:
     findings = []
     for doc in documents:
-        if doc.get("ext") not in (".pdf", ".docx", ".txt", ".md"):
+        if doc.get("ext") not in TEXTUAL_DOC_EXTS:
             continue
         text = doc.get("text", "")
         trigger = re.search(r"\b(?:cloud|nuvem|aws|azure|gcp|openstack|kubernetes|container|serverless|iaas|paas|saas)\b", text, re.I)
@@ -122,7 +125,7 @@ def analyze_cloud(documents: list[dict]) -> list[dict]:
 def analyze_datacenter(documents: list[dict]) -> list[dict]:
     findings = []
     for doc in documents:
-        if doc.get("ext") not in (".pdf", ".docx", ".txt", ".md"):
+        if doc.get("ext") not in TEXTUAL_DOC_EXTS:
             continue
         text = doc.get("text", "")
         trigger = re.search(r"\b(?:data\s*center|datacenter|tier\s*(?:iii|iv|3|4)|ups|nobreak|pdu|gerador|rack|climatiza[cç][aã]o)\b", text, re.I)
@@ -141,19 +144,23 @@ def analyze_datacenter(documents: list[dict]) -> list[dict]:
 
 
 def run(documents: list[dict], skills: list[str]) -> list[dict]:
+    norm_docs = [
+        {**doc, "text": strip_non_normative_comments(doc.get("text", ""))}
+        for doc in documents
+    ]
     result = []
     if "analisar-hld" in skills:
-        result.extend(analyze_hld(documents))
+        result.extend(analyze_hld(norm_docs))
     if "analisar-carrier" in skills:
-        result.extend(analyze_carrier(documents))
+        result.extend(analyze_carrier(norm_docs))
     if "analisar-integracoes" in skills:
-        result.extend(analyze_integrations(documents))
+        result.extend(analyze_integrations(norm_docs))
     if "analisar-lgpd" in skills:
-        result.extend(analyze_lgpd(documents))
+        result.extend(analyze_lgpd(norm_docs))
     if "analisar-cloud" in skills:
-        result.extend(analyze_cloud(documents))
+        result.extend(analyze_cloud(norm_docs))
     if "analisar-datacenter" in skills:
-        result.extend(analyze_datacenter(documents))
+        result.extend(analyze_datacenter(norm_docs))
     return result
 
 

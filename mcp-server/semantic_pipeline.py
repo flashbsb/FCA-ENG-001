@@ -11,8 +11,8 @@ import unicodedata
 
 
 SEMANTIC_DOCUMENT_EXTS = {
-    ".pdf", ".docx", ".txt", ".md", ".json", ".yaml", ".yml",
-    ".xlsx", ".xls", ".csv", ".svg", ".drawio",
+    ".pdf", ".docx", ".pptx", ".odt", ".ods", ".txt", ".md", ".json", ".yaml", ".yml",
+    ".html", ".htm", ".xml", ".xlsx", ".xls", ".csv", ".tsv", ".svg", ".drawio", ".vsdx",
 }
 VISUAL_ONLY_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
 SPREADSHEET_SKILLS = {"analisar-planilha"}
@@ -75,7 +75,7 @@ def build_required_scopes(documents: list[dict], skills: list[str]) -> tuple[lis
     scopes = []
     for skill in dict.fromkeys(str(s) for s in skills if str(s) not in VISUAL_SKILLS):
         for doc in readable:
-            if skill in SPREADSHEET_SKILLS and str(doc.get("ext", "")).lower() not in {".xlsx", ".xls", ".csv"}:
+            if skill in SPREADSHEET_SKILLS and str(doc.get("ext", "")).lower() not in {".xlsx", ".xls", ".ods", ".csv", ".tsv"}:
                 continue
             scopes.append({"skill": skill, "document_path": str(doc["relative_path"])})
     return scopes, sorted(path for path in unreadable if path)

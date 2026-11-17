@@ -14,6 +14,10 @@ Todas as alterações graduais, correções e melhorias arquiteturais implementa
   - Refinamento de `detect_document_versions` (`mcp-server/audit_engine.py`) e garantia do estado fail-safe `PENDENTE DE ADJUDICAÇÃO` (com `iqd="—"`) em `generate_6_reports` quando houver achados pendentes.
 
 ### Adicionado / Melhorado
+- **Comentários de Revisão Não-Normativos e Novos Formatos (Fase 5):**
+  - Extração explícita e segregada de comentários de revisão, anotações e alterações rastreadas (*Track Changes* `w:ins`/`w:del` e `word/comments.xml` em `.docx`, `xl/comments*.xml` e `threadedComments` em `.xlsx`, `/Annots` em `.pdf`, `comments` em `.pptx`, `<office:annotation>` em `.odt`/`.ods` e `<!-- ... -->` em `.html`/`.xml`) com o rótulo `[COMENTÁRIO DE REVISÃO — NÃO FONTE DE VERDADE]`.
+  - Controle `EDIT-010` em `analyze_document_structure` sinalizando comentários/alterações pendentes e filtro `strip_non_normative_comments` (`mcp-server/audit_pipeline.py`) para impedir que comentários mascarem lacunas ou sejam tratados como requisitos aprovados nos controles determinísticos.
+  - Suporte nativo aos novos formatos `.pptx` (slides, tabelas, notas de apresentador e mídias), `.vsdx` (formas, conexões e mídias Visio), `.odt`/`.ods`, `.tsv`, `.html`/`.htm`, `.xml` e suporte ampliado a `.xls` legado (`xlrd`/LibreOffice headless), com cobertura em `visual_pipeline.py`, `semantic_pipeline.py`, `tabular_visual_controls.py` e `test_adjudication.py`.
 - **Contrato de Schema, Controles Tabulares e Relatórios Offline (Fase 4):**
   - Criação de `mcp-server/schemas.py` com tipos `TypedDict`, sincronização de campos canônicos/legados (`ensure_canonical_finding_fields`) e validação estrutural (`validate_dados_analise_schema`) integrada a `tool_validate_analise_contract`.
   - Refinamento do denominador dinâmico do IQD via contagem real de itens aplicáveis nos checklists ativos (`compute_checklist_denominator` em `mcp-server/audit_engine.py` integrada em `tool_run_full_audit`).

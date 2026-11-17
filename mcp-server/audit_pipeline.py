@@ -27,6 +27,17 @@ GENERIC_LOCATIONS = {
     "localizacao desconhecida",
     "trecho identificado automaticamente; confirmar seção/página.",
 }
+REVIEW_COMMENT_PREFIX = "[COMENTÁRIO DE REVISÃO — NÃO FONTE DE VERDADE"
+
+
+def strip_non_normative_comments(text: str) -> str:
+    """Neutraliza comentários de revisão preservando as quebras de linha para manter Linha N estável."""
+    if not text:
+        return ""
+    return "\n".join(
+        "" if line.strip().startswith(REVIEW_COMMENT_PREFIX) else line
+        for line in text.splitlines()
+    )
 
 
 def _clean_literal_unicode(val):
@@ -281,6 +292,7 @@ RULE_PREFIX_CHECKLIST_MAP = {
     "edit-007": ["estrutura_e_referencias.md", "editorial.md"],
     "edit-008": ["estrutura_e_referencias.md", "editorial.md"],
     "edit-009": ["iso.md", "rfc.md", "editorial.md"],
+    "edit-010": ["editorial.md", "estrutura_e_referencias.md"],
     "edit": ["editorial.md", "estrutura_e_referencias.md"],
     "estr": ["estrutura_e_referencias.md", "editorial.md"],
     "rfp-norma": ["rfp.md", "iso.md", "ieee.md"],
@@ -416,7 +428,7 @@ def find_cross_document_conflicts(documents: list[dict]) -> list[dict]:
     values = defaultdict(list)
     pattern = re.compile(r"\b(?:sla|disponibilidade)[^\n.]{0,120}?(\d{1,2}[,.]\d{1,4})\s*%", re.I)
     for doc in documents:
-        text = doc.get("text", "")
+        text = strip_non_normative_comments(doc.get("text", ""))
         for match in pattern.finditer(text):
             value = match.group(1).replace(",", ".")
             line_no = text[:match.start()].count("\n") + 1

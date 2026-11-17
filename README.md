@@ -116,7 +116,7 @@ entrada/
     quantitativos.xlsx
 ```
 
-**Formatos suportados:** `.docx`, `.pdf`, `.xlsx`, `.csv`, `.txt`, `.md`, `.json`, `.yaml`, `.png`, `.jpg`, `.svg`
+**Formatos suportados:** `.docx`, `.pdf`, `.xlsx`, `.xls`, `.ods`, `.csv`, `.tsv`, `.pptx`, `.odt`, `.txt`, `.md`, `.json`, `.yaml`, `.html`, `.xml`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.drawio`, `.vsdx` (com extração de comentários/anotações não-normativos em `.docx`, `.xlsx`, `.pdf`, `.pptx`, `.odt`/`.ods` e `.html`/`.xml`)
 
 ---
 

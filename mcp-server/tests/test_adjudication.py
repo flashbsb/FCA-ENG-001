@@ -418,6 +418,185 @@ class FindingAdjudicationTests(unittest.TestCase):
             self.assertNotIn("EDIT-002", ids, f"Erro de codificação inesperado em {doc}")
             self.assertNotIn("EDIT-007", ids, f"Salto numérico inesperado em {doc}")
 
+    def test_docx_and_xlsx_review_comments_extracted_as_non_normative_and_flagged(self):
+        import zipfile
+        import audit_pipeline
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tmp = pathlib.Path(temp_dir)
+            docx_path = tmp / "hld_com_comentarios.docx"
+            with zipfile.ZipFile(docx_path, "w") as zf:
+                zf.writestr(
+                    "word/document.xml",
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                    '<w:body>'
+                    '<w:p><w:r><w:t>Arquitetura em cluster de alta disponibilidade (HA).</w:t></w:r>'
+                    '<w:ins w:id="1" w:author="Ana" w:date="2026-11-17T10:00:00Z">'
+                    '<w:r><w:t> Revisar redação.</w:t></w:r></w:ins></w:p>'
+                    '</w:body></w:document>',
+                )
+                zf.writestr(
+                    "word/comments.xml",
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                    '<w:comment w:id="7" w:author="Revisor" w:date="2026-11-17T11:00:00Z">'
+                    '<w:p><w:r><w:t>Quorum e Witness pendentes de definição.</w:t></w:r></w:p>'
+                    '</w:comment></w:comments>',
+                )
+
+            extracted_docx = server.extract_text_from_file(str(docx_path))
+            self.assertIn(audit_pipeline.REVIEW_COMMENT_PREFIX, extracted_docx)
+            self.assertIn("Quorum e Witness pendentes", extracted_docx)
+            self.assertIn("Track Changes DOCX (Inserção por Ana", extracted_docx)
+
+            stripped = audit_pipeline.strip_non_normative_comments(extracted_docx)
+            self.assertNotIn("Quorum", stripped)
+            self.assertIn("Arquitetura em cluster", stripped)
+
+            struct_findings = server.analyze_document_structure(str(docx_path))
+            self.assertIn("EDIT-010", {f["id"] for f in struct_findings})
+
+            hld_findings = server.analyze_document_domain_technical(str(docx_path), ["analisar-hld"])
+            self.assertIn("HLD-001", {f["id"] for f in hld_findings})
+
+            xlsx_path = tmp / "orcamento_com_notas.xlsx"
+            with zipfile.ZipFile(xlsx_path, "w") as zf:
+                zf.writestr(
+                    "xl/workbook.xml",
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+                    'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                    '<sheets><sheet name="Custos" sheetId="1" r:id="rId1"/></sheets></workbook>',
+                )
+                zf.writestr(
+                    "xl/_rels/workbook.xml.rels",
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+                    '</Relationships>',
+                )
+                zf.writestr(
+                    "xl/worksheets/sheet1.xml",
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                    '<sheetData>'
+                    '<row r="1"><c r="A1" t="inlineStr"><is><t>Item</t></is></c><c r="B1" t="inlineStr"><is><t>Quantidade</t></is></c></row>'
+                    '<row r="2"><c r="A2" t="inlineStr"><is><t>Router</t></is></c><c r="B2"><v>4</v></c></row>'
+                    '</sheetData></worksheet>',
+                )
+                zf.writestr(
+                    "xl/comments1.xml",
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                    '<authors><author>Pedro</author></authors>'
+                    '<commentList><comment ref="B2" authorId="0"><text><t>Confirmar quantitativo com fornecedor</t></text></comment></commentList>'
+                    '</comments>',
+                )
+
+            extracted_xlsx = server.extract_text_from_file(str(xlsx_path))
+            self.assertIn(audit_pipeline.REVIEW_COMMENT_PREFIX, extracted_xlsx)
+            self.assertIn("Planilha XLSX · Célula B2 (Pedro)", extracted_xlsx)
+            self.assertIn("Confirmar quantitativo com fornecedor", extracted_xlsx)
+
+    def test_new_formats_pptx_vsdx_ods_tsv_extraction(self):
+        import zipfile
+        import audit_pipeline
+        import tabular_visual_controls
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tmp = pathlib.Path(temp_dir)
+
+            pptx_path = tmp / "arquitetura.pptx"
+            with zipfile.ZipFile(pptx_path, "w") as zf:
+                zf.writestr(
+                    "ppt/slides/slide1.xml",
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+                    'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+                    '<p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Topologia Core MPLS</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>'
+                    '</p:sld>',
+                )
+                zf.writestr(
+                    "ppt/notesSlides/notesSlide1.xml",
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<p:notes xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" '
+                    'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+                    '<p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Validar latência máxima de 15ms</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld>'
+                    '</p:notes>',
+                )
+                zf.writestr(
+                    "ppt/commentAuthors.xml",
+                    '<p:cmAuthorLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cmAuthor id="0" name="Carla"/></p:cmAuthorLst>',
+                )
+                zf.writestr(
+                    "ppt/comments/comment1.xml",
+                    '<p:cmLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
+                    '<p:cm authorId="0"><p:text>Checar rotas redundantes</p:text></p:cm></p:cmLst>',
+                )
+
+            pptx_txt = server.extract_text_from_file(str(pptx_path))
+            self.assertIn("[Slide 1] Topologia Core MPLS", pptx_txt)
+            self.assertIn("[Nota do Apresentador — Slide 1] Validar latência máxima de 15ms", pptx_txt)
+            self.assertIn(audit_pipeline.REVIEW_COMMENT_PREFIX, pptx_txt)
+            self.assertIn("Comentário PPTX (Carla)", pptx_txt)
+
+            vsdx_path = tmp / "topologia.vsdx"
+            with zipfile.ZipFile(vsdx_path, "w") as zf:
+                zf.writestr(
+                    "visio/pages/page1.xml",
+                    '<PageContents xmlns="http://schemas.microsoft.com/office/visio/2012/main">'
+                    '<Shapes><Shape ID="1"><Text>PE-Core-SP</Text></Shape><Shape ID="2"><Text>PE-Edge-RJ</Text></Shape></Shapes>'
+                    '<Connects><Connect FromSheet="1" ToSheet="2"/></Connects>'
+                    '</PageContents>',
+                )
+            vsdx_txt = server.extract_text_from_file(str(vsdx_path))
+            self.assertIn("[Página Visio 1] PE-Core-SP", vsdx_txt)
+            self.assertIn("PE-Core-SP -> PE-Edge-RJ", vsdx_txt)
+
+            ods_path = tmp / "itens.ods"
+            with zipfile.ZipFile(ods_path, "w") as zf:
+                zf.writestr(
+                    "content.xml",
+                    '<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
+                    'xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" '
+                    'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" '
+                    'xmlns:dc="http://purl.org/dc/elements/1.1/">'
+                    '<office:body><office:spreadsheet>'
+                    '<table:table table:name="Resumo">'
+                    '<table:table-row><table:table-cell><text:p>Item</text:p></table:table-cell><table:table-cell><text:p>Quantidade</text:p></table:table-cell></table:table-row>'
+                    '<table:table-row><table:table-cell><text:p>Switch A</text:p></table:table-cell><table:table-cell><text:p>2</text:p></table:table-cell></table:table-row>'
+                    '<table:table-row><table:table-cell><text:p>Switch B</text:p></table:table-cell><table:table-cell><text:p>3</text:p></table:table-cell></table:table-row>'
+                    '<table:table-row><table:table-cell><text:p>Total</text:p></table:table-cell><table:table-cell><text:p>9</text:p><office:annotation><dc:creator>Joao</dc:creator><text:p>Conferir soma</text:p></office:annotation></table:table-cell></table:table-row>'
+                    '</table:table></office:spreadsheet></office:body></office:document-content>',
+                )
+            ods_txt = server.extract_text_from_file(str(ods_path))
+            self.assertIn("[ABA: Resumo]", ods_txt)
+            self.assertIn("Switch A | 2", ods_txt)
+            self.assertIn("Anotação OpenDocument (Joao)] Conferir soma", ods_txt)
+            ods_sum_findings = tabular_visual_controls.spreadsheet_total_sum_mismatches([{
+                "name": "itens.ods",
+                "relative_path": "itens.ods",
+                "ext": ".ods",
+                "sha256": "b" * 64,
+                "text": ods_txt,
+            }])
+            self.assertEqual(len(ods_sum_findings), 1)
+            self.assertEqual(ods_sum_findings[0]["rule_id"], "XLS-SUM-001")
+
+            tsv_path = tmp / "valores.tsv"
+            tsv_path.write_text("Item\tValor Total\nItem 1\t10\nItem 2\t20\nTotal\t99\n", encoding="utf-8")
+            tsv_txt = server.extract_text_from_file(str(tsv_path))
+            self.assertIn("Item | Valor Total", tsv_txt)
+            tsv_sum = tabular_visual_controls.spreadsheet_total_sum_mismatches([{
+                "name": "valores.tsv",
+                "relative_path": "valores.tsv",
+                "ext": ".tsv",
+                "sha256": "c" * 64,
+                "text": tsv_txt,
+            }])
+            self.assertEqual(len(tsv_sum), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

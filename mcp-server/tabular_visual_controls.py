@@ -3,6 +3,11 @@ from __future__ import annotations
 
 import re
 
+from audit_pipeline import strip_non_normative_comments
+
+SPREADSHEET_EXTS = (".xlsx", ".xls", ".ods", ".csv", ".tsv")
+VISUAL_NON_TEXT_EXTS = (".png", ".jpg", ".jpeg", ".svg", ".drawio", ".vsdx", ".bmp", ".gif", ".webp", ".tif", ".tiff")
+
 
 def _clean(value: str) -> str:
     return re.sub(r"[^a-z0-9 ]", " ", value.lower()).strip()
@@ -36,14 +41,15 @@ def _sheet_rows(doc: dict):
 def spreadsheet_text_conflicts(documents: list[dict]) -> list[dict]:
     """Confronta quantidade de item somente quando há cabeçalho explícito e contexto textual correspondente."""
     findings = []
-    sheets = [doc for doc in documents if doc.get("ext") in (".xlsx", ".xls", ".csv")]
-    texts = [doc for doc in documents if doc.get("ext") not in (".xlsx", ".xls", ".csv", ".png", ".jpg", ".jpeg", ".svg", ".drawio", ".bmp")]
+    sheets = [doc for doc in documents if doc.get("ext") in SPREADSHEET_EXTS]
+    texts = [doc for doc in documents if doc.get("ext") not in SPREADSHEET_EXTS + VISUAL_NON_TEXT_EXTS]
     seen = set()
     for sheet in sheets:
-        for label, quantity, row in _sheet_rows(sheet):
+        sheet_norm = {**sheet, "text": strip_non_normative_comments(sheet.get("text", ""))}
+        for label, quantity, row in _sheet_rows(sheet_norm):
             label_tokens = _tokens(label)
             for text_doc in texts:
-                body = text_doc.get("text", "")
+                body = strip_non_normative_comments(text_doc.get("text", ""))
                 lower = body.lower()
                 if not label_tokens or not all(token in lower for token in label_tokens):
                     continue
@@ -91,17 +97,17 @@ def spreadsheet_text_conflicts(documents: list[dict]) -> list[dict]:
 
 
 def diagram_labels_without_textual_counterpart(documents: list[dict]) -> list[dict]:
-    """Registra somente rótulos técnicos estruturados de SVG/DrawIO sem afirmar conflito visual."""
+    """Registra somente rótulos técnicos estruturados de SVG/DrawIO/VSDX sem afirmar conflito visual."""
     findings = []
-    visuals = [doc for doc in documents if doc.get("ext") in (".svg", ".drawio")]
-    textual = " ".join(doc.get("text", "") for doc in documents if doc.get("ext") not in (".svg", ".drawio"))
+    visuals = [doc for doc in documents if doc.get("ext") in (".svg", ".drawio", ".vsdx")]
+    textual = " ".join(strip_non_normative_comments(doc.get("text", "")) for doc in documents if doc.get("ext") not in (".svg", ".drawio", ".vsdx"))
     for visual in visuals:
         labels = set(re.findall(r"\b(?:VLAN\s*\d+|\d+(?:\.\d+)?\s*(?:GbE|Gbps|Mbps|Gb/s))\b", visual.get("text", ""), re.I))
         unmatched = sorted(label for label in labels if label.lower() not in textual.lower())
         if unmatched:
             findings.append({
                 "rule_id": "DIA-ROTULO", "title": "Rótulos técnicos do diagrama sem contraparte textual localizada",
-                "doc_origem": visual["name"], "doc_path": visual["relative_path"], "loc": "Rótulos extraídos de SVG/DrawIO",
+                "doc_origem": visual["name"], "doc_path": visual["relative_path"], "loc": "Rótulos extraídos de diagrama estruturado",
                 "cat": "Diagrama/Imagem", "tipo": "Lacuna", "evid": "E1 (rótulo estruturado extraído)", "crit": "Média", "prio": "P2",
                 "citacao": ", ".join(unmatched),
                 "fato": "Foram extraídos rótulos técnicos do diagrama sem menção correspondente no texto do lote.",
@@ -114,12 +120,12 @@ def diagram_labels_without_textual_counterpart(documents: list[dict]) -> list[di
 def spreadsheet_formula_or_error_cells(documents: list[dict]) -> list[dict]:
     """Detecta erros literais de fórmula/referência (#REF!, #DIV/0!, #VALUE!, #NAME?, #NUM!, #NULL!, Err:5) em planilhas."""
     findings = []
-    sheets = [doc for doc in documents if doc.get("ext") in (".xlsx", ".xls", ".csv")]
+    sheets = [doc for doc in documents if doc.get("ext") in SPREADSHEET_EXTS]
     error_rx = re.compile(r"(?:#REF!|#DIV/0!|#VALUE!|#NAME\?|#NUM!|#NULL!|\bErr:5\d*)")
     seen = set()
 
     for sheet in sheets:
-        body = sheet.get("text", "")
+        body = strip_non_normative_comments(sheet.get("text", ""))
         for line_no, raw_line in enumerate(body.splitlines(), 1):
             m = error_rx.search(raw_line)
             if not m:
@@ -195,7 +201,7 @@ def _parse_spreadsheet_number(cell: str) -> float | None:
 def spreadsheet_total_sum_mismatches(documents: list[dict]) -> list[dict]:
     """Compara linhas explícitas de Total/Soma com a soma aritmética das parcelas do mesmo bloco."""
     findings = []
-    sheets = [doc for doc in documents if doc.get("ext") in (".xlsx", ".xls", ".csv")]
+    sheets = [doc for doc in documents if doc.get("ext") in SPREADSHEET_EXTS]
     numeric_header_rx = re.compile(
         r"\b(?:quantidade|qtd|valor|total|subtotal|pre[çc]o|custo|capex|opex|mensal|anual)\b",
         re.I,
@@ -205,7 +211,7 @@ def spreadsheet_total_sum_mismatches(documents: list[dict]) -> list[dict]:
     cell_error_rx = re.compile(r"(?:#REF!|#DIV/0!|#VALUE!|#NAME\?|#NUM!|#NULL!|\bErr:5\d*)")
 
     for sheet in sheets:
-        body = sheet.get("text", "")
+        body = strip_non_normative_comments(sheet.get("text", ""))
         headers = None
         numeric_cols: list[int] = []
         parcel_rows: list[tuple[int, str, list[str]]] = []

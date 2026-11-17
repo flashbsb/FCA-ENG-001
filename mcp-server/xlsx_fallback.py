@@ -65,3 +65,68 @@ def extract_xlsx_data(path: str) -> dict:
             return output
     except Exception:
         return {}
+
+
+def _local_tag(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+
+def extract_xlsx_comments(path: str) -> list[str]:
+    """Extrai comentários tradicionais e encadeados (threadedComments) de .xlsx como contexto não-normativo."""
+    comments: list[str] = []
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = sorted(zf.namelist())
+            for member in names:
+                if re.fullmatch(r"xl/comments\d*\.xml", member):
+                    try:
+                        root = ET.fromstring(zf.read(member))
+                        authors = [
+                            "".join(el.itertext()).strip()
+                            for el in root.iter()
+                            if _local_tag(el.tag) == "author"
+                        ]
+                        for cm in root.iter():
+                            if _local_tag(cm.tag) != "comment":
+                                continue
+                            ref = (cm.attrib.get("ref") or "?").strip()
+                            aid_raw = cm.attrib.get("authorId", "")
+                            author = (
+                                authors[int(aid_raw)]
+                                if aid_raw.isdigit() and int(aid_raw) < len(authors) and authors[int(aid_raw)]
+                                else "Revisor"
+                            )
+                            text_nodes = [
+                                "".join(child.itertext())
+                                for child in cm
+                                if _local_tag(child.tag) == "text"
+                            ]
+                            txt = re.sub(r"\s+", " ", " ".join(text_nodes) or "".join(cm.itertext())).strip()
+                            if txt:
+                                comments.append(
+                                    f"[COMENTÁRIO DE REVISÃO — NÃO FONTE DE VERDADE | Planilha XLSX · Célula {ref} ({author})] {txt}"
+                                )
+                    except Exception:
+                        continue
+                elif re.fullmatch(r"xl/threadedComments/threadedComment\d*\.xml", member):
+                    try:
+                        root = ET.fromstring(zf.read(member))
+                        for tc in root.iter():
+                            if _local_tag(tc.tag) != "threadedComment":
+                                continue
+                            ref = (tc.attrib.get("ref") or "?").strip()
+                            text_nodes = [
+                                "".join(child.itertext())
+                                for child in tc
+                                if _local_tag(child.tag) == "text"
+                            ]
+                            txt = re.sub(r"\s+", " ", " ".join(text_nodes) or "".join(tc.itertext())).strip()
+                            if txt:
+                                comments.append(
+                                    f"[COMENTÁRIO DE REVISÃO — NÃO FONTE DE VERDADE | Planilha XLSX · Célula {ref} (Threaded Comment)] {txt}"
+                                )
+                    except Exception:
+                        continue
+    except Exception:
+        return []
+    return comments

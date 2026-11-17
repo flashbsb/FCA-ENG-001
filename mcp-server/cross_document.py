@@ -4,6 +4,8 @@ from __future__ import annotations
 from collections import defaultdict
 import re
 
+from audit_pipeline import strip_non_normative_comments
+
 
 def _context(text: str, match: re.Match, radius: int = 160) -> str:
     start, end = match.span()
@@ -102,7 +104,11 @@ def standards_without_edition(documents: list[dict]) -> list[dict]:
 
 
 def run(documents: list[dict], skills: list[str]) -> list[dict]:
-    findings = delivery_deadline_conflicts(documents)
+    norm_docs = [
+        {**doc, "text": strip_non_normative_comments(doc.get("text", ""))}
+        for doc in documents
+    ]
+    findings = delivery_deadline_conflicts(norm_docs)
     if "analisar-rfp" in skills:
-        findings.extend(standards_without_edition(documents))
+        findings.extend(standards_without_edition(norm_docs))
     return findings

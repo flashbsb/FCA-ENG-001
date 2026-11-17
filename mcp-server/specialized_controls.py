@@ -8,6 +8,8 @@ from __future__ import annotations
 import os
 import re
 
+from audit_pipeline import strip_non_normative_comments
+
 
 def _quote(text: str, match: re.Match | None, radius: int = 220) -> str:
     if not text or not match:
@@ -136,7 +138,7 @@ def analyze_contract(documents: list[dict]) -> list[dict]:
 def analyze_spreadsheets(documents: list[dict]) -> list[dict]:
     findings = []
     for doc in documents:
-        if doc.get("ext") not in (".xlsx", ".xls", ".csv"):
+        if doc.get("ext") not in (".xlsx", ".xls", ".ods", ".csv", ".tsv"):
             continue
         text = doc.get("text", "")
         trigger = re.search(r"\S", text)
@@ -161,10 +163,14 @@ def analyze_diagrams(documents: list[dict]) -> list[dict]:
 
 def run_specialized_controls(documents: list[dict], skills: list[str]) -> list[dict]:
     active = set(skills)
+    norm_docs = [
+        {**doc, "text": strip_non_normative_comments(doc.get("text", ""))}
+        for doc in documents
+    ]
     findings = []
-    if "analisar-rfp" in active: findings.extend(analyze_rfp(documents))
-    if "analisar-lld" in active: findings.extend(analyze_lld(documents))
-    if "analisar-contrato" in active: findings.extend(analyze_contract(documents))
-    if "analisar-planilha" in active: findings.extend(analyze_spreadsheets(documents))
-    if "analisar-diagramas" in active: findings.extend(analyze_diagrams(documents))
+    if "analisar-rfp" in active: findings.extend(analyze_rfp(norm_docs))
+    if "analisar-lld" in active: findings.extend(analyze_lld(norm_docs))
+    if "analisar-contrato" in active: findings.extend(analyze_contract(norm_docs))
+    if "analisar-planilha" in active: findings.extend(analyze_spreadsheets(norm_docs))
+    if "analisar-diagramas" in active: findings.extend(analyze_diagrams(norm_docs))
     return findings

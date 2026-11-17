@@ -136,16 +136,17 @@ def _save_asset(data: bytes, *, source: str, kind: str, output_dir: str,
     }
 
 
-def _extract_docx_images(path: str, relative_path: str, output_dir: str,
-                         tesseract: str | None, languages: str, remaining: int) -> list[dict]:
+def _extract_zip_media(path: str, relative_path: str, output_dir: str,
+                       member_prefix: str, kind: str,
+                       tesseract: str | None, languages: str, remaining: int) -> list[dict]:
     assets = []
     try:
         with zipfile.ZipFile(path) as archive:
-            members = sorted(name for name in archive.namelist() if name.startswith("word/media/"))
+            members = sorted(name for name in archive.namelist() if name.startswith(member_prefix) and not name.endswith("/"))
             for member in members[:remaining]:
                 try:
                     row = _save_asset(archive.read(member), source=relative_path,
-                                      kind="imagem_embutida_docx", output_dir=output_dir,
+                                      kind=kind, output_dir=output_dir,
                                       member=member, proposed_name=member,
                                       tesseract=tesseract, languages=languages)
                     if row:
@@ -155,6 +156,12 @@ def _extract_docx_images(path: str, relative_path: str, output_dir: str,
     except Exception:
         pass
     return assets
+
+
+def _extract_docx_images(path: str, relative_path: str, output_dir: str,
+                         tesseract: str | None, languages: str, remaining: int) -> list[dict]:
+    return _extract_zip_media(path, relative_path, output_dir, "word/media/",
+                              "imagem_embutida_docx", tesseract, languages, remaining)
 
 
 def _render_pdf_page(path: str, page_number: int, output_dir: str, relative_path: str,
@@ -287,6 +294,24 @@ def extract_visual_inventory(source_root: str, output_dir: str,
                                             tesseract, languages, max_assets - len(assets))
                 assets.extend(rows)
                 status = "mídias word/media extraídas"
+            elif ext == ".pptx":
+                rows = _extract_zip_media(source_path, relative_path, output_dir,
+                                          "ppt/media/", "imagem_embutida_pptx",
+                                          tesseract, languages, max_assets - len(assets))
+                assets.extend(rows)
+                status = "mídias ppt/media extraídas"
+            elif ext == ".vsdx":
+                rows = _extract_zip_media(source_path, relative_path, output_dir,
+                                          "visio/media/", "imagem_embutida_vsdx",
+                                          tesseract, languages, max_assets - len(assets))
+                assets.extend(rows)
+                status = "mídias visio/media extraídas"
+            elif ext in (".odt", ".ods"):
+                rows = _extract_zip_media(source_path, relative_path, output_dir,
+                                          "Pictures/", "imagem_embutida_opendocument",
+                                          tesseract, languages, max_assets - len(assets))
+                assets.extend(rows)
+                status = "mídias Pictures/ extraídas"
             elif ext == ".pdf":
                 rows, rendered, status, coverage = _extract_pdf_images(
                     source_path, relative_path, output_dir, tesseract, languages,

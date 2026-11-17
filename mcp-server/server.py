@@ -16,6 +16,7 @@ import zipfile
 import datetime
 import re
 import subprocess
+import tempfile
 import xml.etree.ElementTree as ET
 from functools import lru_cache
 
@@ -25,7 +26,12 @@ if _current_dir not in sys.path:
 
 import html_compiler
 import audit_pipeline
-from audit_pipeline import sanitize_batch_isolation, clean_unicode_text
+from audit_pipeline import (
+    sanitize_batch_isolation,
+    clean_unicode_text,
+    strip_non_normative_comments,
+    REVIEW_COMMENT_PREFIX,
+)
 import specialized_controls
 import cross_document
 import tabular_visual_controls
@@ -33,7 +39,10 @@ import advanced_specialized_controls
 import visual_pipeline
 import semantic_pipeline
 import schemas
-from xlsx_fallback import extract_xlsx_data as extract_xlsx_data_fallback
+from xlsx_fallback import (
+    extract_xlsx_data as extract_xlsx_data_fallback,
+    extract_xlsx_comments,
+)
 
 
 
@@ -274,6 +283,40 @@ def _extract_docx_lines(fpath: str) -> tuple[list[str], list[str]]:
             except Exception:
                 continue
 
+        # Extrai alterações rastreadas (Track Changes w:ins / w:del) como contexto não-normativo
+        for tag_local, label_tc, text_tag in (('ins', 'Inserção', 't'), ('del', 'Exclusão', 'delText')):
+            for tc_el in tree.findall(f'.//w:{tag_local}', ns):
+                tc_txt = ' '.join((t.text or '').strip() for t in tc_el.findall(f'.//w:{text_tag}', ns) if (t.text or '').strip())
+                tc_txt = re.sub(r'\s+', ' ', tc_txt).strip()
+                if not tc_txt:
+                    continue
+                author = tc_el.get(f'{{{w_ns}}}author', '') or 'Autor não informado'
+                date_val = tc_el.get(f'{{{w_ns}}}date', '')
+                who = f'{author}, {date_val[:10]}' if date_val else author
+                comment_line = f'{REVIEW_COMMENT_PREFIX} | Track Changes DOCX ({label_tc} por {who})] {tc_txt}'
+                plain_lines.append(comment_line)
+                located_lines.append(comment_line)
+
+        # Extrai balões de comentários (word/comments.xml) como contexto não-normativo
+        if 'word/comments.xml' in z.namelist():
+            try:
+                c_xml = z.read('word/comments.xml').decode('utf-8', errors='ignore')
+                c_tree = ET.fromstring(c_xml)
+                for c_el in c_tree.findall('.//w:comment', ns):
+                    cid = c_el.get(f'{{{w_ns}}}id', '') or '?'
+                    author = c_el.get(f'{{{w_ns}}}author', '') or 'Revisor'
+                    date_val = c_el.get(f'{{{w_ns}}}date', '')
+                    who = f'{author}, {date_val[:10]}' if date_val else author
+                    p_texts = [''.join(t.text or '' for t in p.findall('.//w:t', ns)).strip() for p in c_el.findall('.//w:p', ns)]
+                    c_txt = ' '.join(pt for pt in p_texts if pt) or ''.join(t.text or '' for t in c_el.findall('.//w:t', ns)).strip()
+                    c_txt = re.sub(r'\s+', ' ', c_txt).strip()
+                    if c_txt:
+                        comment_line = f'{REVIEW_COMMENT_PREFIX} | Comentário DOCX #{cid} ({who})] {c_txt}'
+                        plain_lines.append(comment_line)
+                        located_lines.append(comment_line)
+            except Exception:
+                pass
+
     return plain_lines, located_lines
 
 
@@ -292,16 +335,42 @@ def extract_docx_text(fpath: str) -> str:
             return ''
 
 
+def _extract_pdf_annotations(page, page_num: int) -> list[str]:
+    """Extrai comentários e anotações de revisão (/Annots) de uma página PDF sem tratá-los como norma."""
+    notes = []
+    try:
+        annots = page.get('/Annots') or getattr(page, 'annotations', None) or []
+        for ref in annots:
+            try:
+                obj = ref.get_object() if hasattr(ref, 'get_object') else ref
+                if not isinstance(obj, dict):
+                    continue
+                subtype = str(obj.get('/Subtype', ''))
+                if subtype not in ('/Text', '/FreeText', '/Highlight', '/Underline', '/StrikeOut', '/Squiggly', '/Popup', ''):
+                    continue
+                contents = re.sub(r'\s+', ' ', str(obj.get('/Contents', '') or '')).strip()
+                if not contents:
+                    continue
+                author = re.sub(r'\s+', ' ', str(obj.get('/T', '') or '')).strip() or 'Revisor'
+                notes.append(f'{REVIEW_COMMENT_PREFIX} | Anotação PDF Página {page_num} ({author})] {contents}')
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return notes
+
+
 def extract_pdf_text(fpath: str) -> str:
-    """Extrai texto de .pdf usando pypdf se disponível."""
+    """Extrai texto e anotações de revisão de .pdf usando pypdf se disponível."""
     try:
         import pypdf
         reader = pypdf.PdfReader(fpath)
         pages = []
-        for page in reader.pages:
+        for page_num, page in enumerate(reader.pages, 1):
             text = page.extract_text()
             if text:
                 pages.append(text)
+            pages.extend(_extract_pdf_annotations(page, page_num))
         return '\n'.join(pages)
     except ImportError:
         return ''
@@ -309,8 +378,45 @@ def extract_pdf_text(fpath: str) -> str:
         return ''
 
 
+def _read_xls_legacy(fpath: str) -> dict:
+    """Tenta ler .xls legado via xlrd ou conversão headless pelo LibreOffice quando disponível."""
+    try:
+        import xlrd
+        wb = xlrd.open_workbook(fpath)
+        sheets = {}
+        for name in wb.sheet_names():
+            ws = wb.sheet_by_name(name)
+            rows = []
+            for r_idx in range(min(ws.nrows, 1000)):
+                row_data = [str(ws.cell_value(r_idx, c_idx)) if ws.cell_value(r_idx, c_idx) is not None else '' for c_idx in range(ws.ncols)]
+                if any(c.strip() for c in row_data):
+                    rows.append(row_data)
+            if rows:
+                sheets[name] = rows
+        return sheets
+    except Exception:
+        pass
+    soffice = shutil.which('libreoffice') or shutil.which('soffice')
+    if soffice:
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                res = subprocess.run(
+                    [soffice, '--headless', '--convert-to', 'xlsx', '--outdir', tmp_dir, fpath],
+                    capture_output=True, text=True, timeout=30, check=False,
+                )
+                if res.returncode == 0:
+                    converted = next((os.path.join(tmp_dir, fn) for fn in os.listdir(tmp_dir) if fn.lower().endswith('.xlsx')), None)
+                    if converted:
+                        return extract_xlsx_data(converted)
+        except Exception:
+            pass
+    return {}
+
+
 def extract_xlsx_data(fpath: str) -> dict:
-    """Extrai dados de .xlsx usando openpyxl se disponível."""
+    """Extrai dados de .xlsx (ou .xls via xlrd/LibreOffice) usando openpyxl ou fallback XML."""
+    if os.path.splitext(fpath)[1].lower() == '.xls':
+        return _read_xls_legacy(fpath)
     try:
         import openpyxl
         wb = openpyxl.load_workbook(fpath, read_only=True, data_only=True)
@@ -337,9 +443,285 @@ def extract_csv_text(fpath: str) -> str:
     return _read_text_with_fallback(fpath, max_chars=200000)
 
 
+def extract_tsv_text(fpath: str) -> str:
+    """Lê TSV com fallback de codificação convertendo tabulações em separador tabular '|'."""
+    raw = _read_text_with_fallback(fpath, max_chars=200000)
+    return '\n'.join(' | '.join(col.strip() for col in line.split('\t')) for line in raw.splitlines())
+
+
 def extract_text_file(fpath: str) -> str:
     """Lê .md, .txt, .json, .yaml como texto com fallback de codificação."""
     return _read_text_with_fallback(fpath, max_chars=200000)
+
+
+def _xml_local(tag: str) -> str:
+    return tag.rsplit('}', 1)[-1] if '}' in tag else tag
+
+
+def extract_pptx_text(fpath: str) -> str:
+    """Extrai texto de slides, tabelas, notas de apresentador e comentários em arquivos .pptx."""
+    lines = []
+    comment_lines = []
+    try:
+        with zipfile.ZipFile(fpath) as z:
+            names = z.namelist()
+            slides = sorted(
+                (n for n in names if re.fullmatch(r'ppt/slides/slide\d+\.xml', n)),
+                key=lambda n: int(re.search(r'(\d+)\.xml$', n).group(1)),
+            )
+            authors_map = {}
+            if 'ppt/commentAuthors.xml' in names:
+                try:
+                    au_root = ET.fromstring(z.read('ppt/commentAuthors.xml'))
+                    for au in au_root.iter():
+                        if _xml_local(au.tag) == 'cmAuthor':
+                            aid = au.attrib.get('id', '')
+                            aname = au.attrib.get('name', '').strip()
+                            if aid and aname:
+                                authors_map[aid] = aname
+                except Exception:
+                    pass
+
+            matched_notes = set()
+            for s_name in slides:
+                s_num = re.search(r'(\d+)\.xml$', s_name).group(1)
+                try:
+                    s_root = ET.fromstring(z.read(s_name))
+                except Exception:
+                    continue
+                tbl_nodes = {id(tbl) for tbl in s_root.iter() if _xml_local(tbl.tag) == 'tbl'}
+                tbl_descendants = set()
+                for el in s_root.iter():
+                    if _xml_local(el.tag) == 'tbl':
+                        for desc in el.iter():
+                            tbl_descendants.add(id(desc))
+                        for tr in el:
+                            if _xml_local(tr.tag) != 'tr':
+                                continue
+                            row_cells = []
+                            for tc in tr:
+                                if _xml_local(tc.tag) != 'tc':
+                                    continue
+                                cell_ps = [
+                                    ''.join(t.text or '' for t in p.iter() if _xml_local(t.tag) == 't').strip()
+                                    for p in tc.iter() if _xml_local(p.tag) == 'p'
+                                ]
+                                row_cells.append(' '.join(cp for cp in cell_ps if cp))
+                            if any(c.strip() for c in row_cells):
+                                lines.append(f'[Slide {s_num}] ' + ' | '.join(row_cells))
+                for p in s_root.iter():
+                    if _xml_local(p.tag) == 'p' and id(p) not in tbl_descendants and id(p) not in tbl_nodes:
+                        p_txt = ''.join(t.text or '' for t in p.iter() if _xml_local(t.tag) == 't').strip()
+                        p_txt = re.sub(r'\s+', ' ', p_txt).strip()
+                        if p_txt:
+                            lines.append(f'[Slide {s_num}] {p_txt}')
+
+                note_target = None
+                rels_name = f'ppt/slides/_rels/slide{s_num}.xml.rels'
+                if rels_name in names:
+                    try:
+                        rels_root = ET.fromstring(z.read(rels_name))
+                        for rel in rels_root.iter():
+                            target = rel.attrib.get('Target', '')
+                            if 'notesSlide' in target:
+                                norm_t = os.path.normpath(os.path.join('ppt/slides', target)).replace('\\', '/')
+                                if norm_t in names:
+                                    note_target = norm_t
+                                    break
+                    except Exception:
+                        pass
+                if not note_target and f'ppt/notesSlides/notesSlide{s_num}.xml' in names:
+                    note_target = f'ppt/notesSlides/notesSlide{s_num}.xml'
+                if note_target and note_target not in matched_notes:
+                    matched_notes.add(note_target)
+                    try:
+                        n_root = ET.fromstring(z.read(note_target))
+                        for p in n_root.iter():
+                            if _xml_local(p.tag) == 'p':
+                                n_txt = ''.join(t.text or '' for t in p.iter() if _xml_local(t.tag) == 't').strip()
+                                n_txt = re.sub(r'\s+', ' ', n_txt).strip()
+                                if n_txt and not n_txt.isdigit():
+                                    lines.append(f'[Nota do Apresentador — Slide {s_num}] {n_txt}')
+                    except Exception:
+                        pass
+
+            for cm_file in sorted(n for n in names if re.fullmatch(r'ppt/comments/(?:comment|modernComment)\d*\.xml', n)):
+                try:
+                    cm_root = ET.fromstring(z.read(cm_file))
+                    for cm in cm_root.iter():
+                        if _xml_local(cm.tag) in ('cm', 'threadedComment'):
+                            aid = cm.attrib.get('authorId', '')
+                            author = authors_map.get(aid, 'Revisor')
+                            t_parts = [''.join(el.itertext()).strip() for el in cm if _xml_local(el.tag) == 'text']
+                            txt = re.sub(r'\s+', ' ', ' '.join(t_parts)).strip()
+                            if txt:
+                                comment_lines.append(f'{REVIEW_COMMENT_PREFIX} | Comentário PPTX ({author})] {txt}')
+                except Exception:
+                    continue
+    except Exception:
+        return ''
+    return '\n'.join(lines + comment_lines)
+
+
+def extract_vsdx_text(fpath: str) -> str:
+    """Extrai textos de formas (Shapes) e conexões em arquivos Microsoft Visio .vsdx."""
+    lines = []
+    try:
+        with zipfile.ZipFile(fpath) as z:
+            pages = sorted(
+                (n for n in z.namelist() if re.fullmatch(r'visio/pages/page\d+\.xml', n)),
+                key=lambda n: int(re.search(r'(\d+)\.xml$', n).group(1)),
+            )
+            for p_name in pages:
+                p_num = re.search(r'(\d+)\.xml$', p_name).group(1)
+                try:
+                    root = ET.fromstring(z.read(p_name))
+                except Exception:
+                    continue
+                id_to_label = {}
+                for sh in root.iter():
+                    if _xml_local(sh.tag) == 'Shape':
+                        sh_id = sh.attrib.get('ID', '')
+                        t_parts = []
+                        for child in sh:
+                            if _xml_local(child.tag) == 'Text':
+                                t_parts.append(re.sub(r'\s+', ' ', ''.join(child.itertext())).strip())
+                        label = ' '.join(tp for tp in t_parts if tp).strip()
+                        if label:
+                            if sh_id:
+                                id_to_label[sh_id] = label
+                            lines.append(f'[Página Visio {p_num}] {label}')
+                conns = []
+                for conn in root.iter():
+                    if _xml_local(conn.tag) == 'Connect':
+                        frm = conn.attrib.get('FromSheet', '')
+                        to = conn.attrib.get('ToSheet', '')
+                        if frm and to and frm != to:
+                            conns.append(f"{id_to_label.get(frm, f'Shape#{frm}')} -> {id_to_label.get(to, f'Shape#{to}')}")
+                if conns:
+                    lines.append(f'[Página Visio {p_num}] Conexões: ' + '; '.join(list(dict.fromkeys(conns))[:200]))
+    except Exception:
+        return ''
+    return '\n'.join(lines)
+
+
+def extract_opendocument_text(fpath: str) -> str:
+    """Extrai texto, tabelas e anotações de revisão de documentos OpenDocument (.odt e .ods)."""
+    lines = []
+    annotations = []
+    ext = os.path.splitext(fpath)[1].lower()
+    try:
+        with zipfile.ZipFile(fpath) as z:
+            if 'content.xml' not in z.namelist():
+                return ''
+            root = ET.fromstring(z.read('content.xml'))
+    except Exception:
+        return ''
+
+    ann_descendants = set()
+    for el in root.iter():
+        if _xml_local(el.tag) == 'annotation':
+            for desc in el.iter():
+                ann_descendants.add(id(desc))
+            creator = 'Revisor'
+            p_texts = []
+            for child in el:
+                clocal = _xml_local(child.tag)
+                if clocal == 'creator':
+                    creator = ''.join(child.itertext()).strip() or 'Revisor'
+                elif clocal in ('p', 'h'):
+                    pt = re.sub(r'\s+', ' ', ''.join(child.itertext())).strip()
+                    if pt:
+                        p_texts.append(pt)
+            ann_txt = ' '.join(p_texts).strip()
+            if ann_txt:
+                annotations.append(f'{REVIEW_COMMENT_PREFIX} | Anotação OpenDocument ({creator})] {ann_txt}')
+
+    tbl_descendants = set()
+    for el in root.iter():
+        if _xml_local(el.tag) == 'table':
+            for desc in el.iter():
+                tbl_descendants.add(id(desc))
+
+    if ext == '.ods':
+        for tbl in root.iter():
+            if _xml_local(tbl.tag) != 'table':
+                continue
+            tname = next((v for k, v in tbl.attrib.items() if k.endswith('}name') or k == 'name'), 'Planilha')
+            t_rows = []
+            for row in tbl:
+                if _xml_local(row.tag) != 'table-row':
+                    continue
+                rep_row = next((int(v) for k, v in row.attrib.items() if k.endswith('}number-rows-repeated') and v.isdigit()), 1)
+                if rep_row > 50:
+                    continue
+                cells = []
+                for cell in row:
+                    if _xml_local(cell.tag) not in ('table-cell', 'covered-table-cell'):
+                        continue
+                    rep_col = next((int(v) for k, v in cell.attrib.items() if k.endswith('}number-columns-repeated') and v.isdigit()), 1)
+                    cell_txt = ' '.join(
+                        re.sub(r'\s+', ' ', ''.join(p.itertext())).strip()
+                        for p in cell if _xml_local(p.tag) in ('p', 'h') and id(p) not in ann_descendants
+                    ).strip()
+                    if rep_col > 30 and not cell_txt:
+                        break
+                    cells.extend([cell_txt] * min(rep_col, 20))
+                while cells and not cells[-1].strip():
+                    cells.pop()
+                if any(c.strip() for c in cells):
+                    t_rows.append(' | '.join(cells))
+            if t_rows:
+                lines.append(f'[ABA: {tname}]')
+                lines.extend(t_rows)
+    else:
+        for el in root.iter():
+            local = _xml_local(el.tag)
+            if id(el) in ann_descendants:
+                continue
+            if local == 'table':
+                for row in el:
+                    if _xml_local(row.tag) != 'table-row':
+                        continue
+                    cells = []
+                    for cell in row:
+                        if _xml_local(cell.tag) not in ('table-cell', 'covered-table-cell'):
+                            continue
+                        cell_txt = ' '.join(
+                            re.sub(r'\s+', ' ', ''.join(p.itertext())).strip()
+                            for p in cell if _xml_local(p.tag) in ('p', 'h') and id(p) not in ann_descendants
+                        ).strip()
+                        cells.append(cell_txt)
+                    if any(c.strip() for c in cells):
+                        lines.append(' | '.join(cells))
+            elif local in ('p', 'h') and id(el) not in tbl_descendants:
+                txt = re.sub(r'\s+', ' ', ''.join(el.itertext())).strip()
+                if txt:
+                    lines.append(txt)
+
+    return '\n'.join(lines + annotations)
+
+
+def extract_html_or_xml_text(fpath: str) -> str:
+    """Extrai texto visível e comentários <!-- ... --> de .html/.htm/.xml como contexto não-normativo."""
+    import html as html_mod
+    raw = _read_text_with_fallback(fpath, max_chars=200000)
+    if not raw:
+        return ''
+    comment_lines = []
+    for raw_c in re.findall(r'<!--(.*?)-->', raw, re.S):
+        c_txt = re.sub(r'\s+', ' ', raw_c).strip()
+        if c_txt:
+            comment_lines.append(f'{REVIEW_COMMENT_PREFIX} | Comentário HTML/XML] {c_txt}')
+    cleaned = re.sub(r'<!--.*?-->', '', raw, flags=re.S)
+    cleaned = re.sub(r'<(script|style)\b[^>]*>.*?</\1>', '', cleaned, flags=re.S | re.I)
+    cleaned = re.sub(r'</(?:td|th)\s*>\s*<(?:td|th)\b[^>]*>', ' | ', cleaned, flags=re.I)
+    cleaned = re.sub(r'<(?:br|/?p|/?div|/?li|/?tr|/?h[1-6]|/?section|/?article)\b[^>]*>', '\n', cleaned, flags=re.I)
+    cleaned = re.sub(r'<[^>]+>', ' ', cleaned)
+    cleaned = html_mod.unescape(cleaned)
+    text_lines = [re.sub(r'[ \t]+', ' ', ln).strip() for ln in cleaned.splitlines()]
+    text_lines = [ln for ln in text_lines if ln]
+    return '\n'.join(text_lines + comment_lines)
 
 
 def get_file_text(fpath: str) -> str:
@@ -349,11 +731,28 @@ def get_file_text(fpath: str) -> str:
         return extract_docx_text(fpath)
     elif ext == '.pdf':
         return extract_pdf_text(fpath)
+    elif ext == '.pptx':
+        return extract_pptx_text(fpath)
+    elif ext == '.vsdx':
+        return extract_vsdx_text(fpath)
+    elif ext in ('.odt', '.ods'):
+        return extract_opendocument_text(fpath)
+    elif ext in ('.html', '.htm', '.xml'):
+        return extract_html_or_xml_text(fpath)
+    elif ext == '.tsv':
+        return extract_tsv_text(fpath)
     elif ext in ('.md', '.txt', '.json', '.yaml', '.yml'):
         return extract_text_file(fpath)
     elif ext == '.csv':
         return extract_csv_text(fpath)
-    # xlsx tem tratamento especial via extract_xlsx_data
+    elif ext in ('.xlsx', '.xls'):
+        sheets = extract_xlsx_data(fpath)
+        body = '\n'.join(
+            f'[ABA: {sheet}]\n' + '\n'.join(' | '.join(row) for row in rows)
+            for sheet, rows in sheets.items()
+        )
+        comments = extract_xlsx_comments(fpath) if ext == '.xlsx' else []
+        return (body + ('\n' if body and comments else '') + '\n'.join(comments)) if (body or comments) else ''
     return ''
 
 
@@ -419,13 +818,21 @@ DOC_TYPE_DOMAINS = {"hld", "lld", "rfp"}  # Exigem 2+ hits ou presença no filen
 
 
 def has_embedded_images(fpath: str, ext: str) -> bool:
-    """Verifica se um arquivo .docx ou .pdf contém imagens/diagramas embutidos."""
-    if ext == '.docx':
+    """Verifica se um arquivo (.docx, .pptx, .vsdx, .odt, .ods ou .pdf) contém imagens embutidas."""
+    zip_media_prefixes = {
+        '.docx': 'word/media/',
+        '.pptx': 'ppt/media/',
+        '.vsdx': 'visio/media/',
+        '.odt': 'Pictures/',
+        '.ods': 'Pictures/',
+    }
+    if ext in zip_media_prefixes:
+        prefix = zip_media_prefixes[ext]
         try:
-            z = zipfile.ZipFile(fpath)
-            for name in z.namelist():
-                if name.startswith('word/media/'):
-                    return True
+            with zipfile.ZipFile(fpath) as z:
+                for name in z.namelist():
+                    if name.startswith(prefix):
+                        return True
         except Exception:
             pass
     elif ext == '.pdf':
@@ -449,24 +856,11 @@ def has_embedded_images(fpath: str, ext: str) -> bool:
 
 
 def extract_text_from_file(fpath: str) -> str:
-    """Extrai o texto legível de um arquivo (.docx, .pdf, .txt, .md, .json, .yaml, .xlsx, .csv)."""
+    """Extrai o texto legível e comentários não-normativos de qualquer formato suportado."""
     ext = os.path.splitext(fpath)[1].lower()
-    text = ""
-    if ext == '.docx':
-        text = extract_docx_text(fpath)
-    elif ext == '.pdf':
-        text = extract_pdf_text(fpath)
-    elif ext in ('.txt', '.md', '.json', '.yaml', '.yml', '.svg', '.drawio'):
-        text = _read_text_with_fallback(fpath)
-    elif ext == '.csv':
-        text = extract_csv_text(fpath)
-    elif ext in ('.xlsx', '.xls'):
-        sheets = extract_xlsx_data(fpath)
-        text = '\n'.join(
-            f"[ABA: {sheet}]\n" + '\n'.join(' | '.join(row) for row in rows)
-            for sheet, rows in sheets.items()
-        )
-    return text
+    if ext in ('.svg', '.drawio'):
+        return _read_text_with_fallback(fpath)
+    return get_file_text(fpath)
 
 
 def _line_snippet(text: str, pos: int, limit: int = 360) -> str:
@@ -486,11 +880,48 @@ def _line_snippet(text: str, pos: int, limit: int = 360) -> str:
 def analyze_document_structure(fpath: str) -> list:
     """Realiza a varredura não-técnica dos 7 pilares de integridade redacional e estrutural."""
     filename = os.path.basename(fpath)
-    text = extract_text_from_file(fpath)
-    if not text:
+    raw_text = extract_text_from_file(fpath)
+    if not raw_text:
         return []
+    text = strip_non_normative_comments(raw_text)
 
     findings = []
+
+    # Controle de Comentários de Revisão / Alterações Rastreadas Pendentes (EDIT-010)
+    if REVIEW_COMMENT_PREFIX in raw_text:
+        comment_lines_found = [
+            (idx, ln.strip())
+            for idx, ln in enumerate(raw_text.splitlines(), 1)
+            if ln.strip().startswith(REVIEW_COMMENT_PREFIX)
+        ]
+        if comment_lines_found:
+            first_line, first_quote = comment_lines_found[0]
+            loc_str = f'Linha {first_line}'
+            findings.append({
+                'id': 'EDIT-010',
+                'title': f'Comentários de revisão ou alterações rastreadas pendentes em {filename}',
+                'doc_origem': filename,
+                'loc': loc_str,
+                'localizacao_exata': loc_str,
+                'cat': 'Integridade Redacional e Estrutural',
+                'tipo': 'Risco',
+                'evid': 'E2 (Corroborado)',
+                'citacao': first_quote[:360],
+                'evidencia_literal': first_quote[:360],
+                'crit': 'Média',
+                'prio': 'P2',
+                'fato': (
+                    f'Foram extraídos {len(comment_lines_found)} comentário(s) ou marcações de revisão pendentes '
+                    'no artefato. Esses apontamentos servem como insumo de verificação, mas não constituem texto normativo aprovado.'
+                ),
+                'impacto': 'Publicar ou contratar com comentários e alterações em aberto gera incerteza sobre qual redação ou requisito vigora oficialmente.',
+                'tipo_solucao': 'Plano de Ação Estruturado',
+                'texto_atual': first_quote[:240],
+                'texto_sugerido': 'Deliberar todos os comentários e alterações rastreadas, incorporando os pontos pertinentes no texto principal e limpando os balões antes da emissão final.',
+                'proprietario': 'Área Emissora / Autor Técnico',
+                'id_acao': 'ACT-EDIT-010',
+                'referencias': [{'titulo': 'FCA-ENG-001 — Controle de Comentários e Rascunhos (EDIT-010)', 'url': '', 'nota': 'Comentários de revisão e Track Changes não constituem fonte normativa de verdade e devem ser saneados.'}]
+            })
 
     # Pilar 6: Marcadores de Rascunho / Campos em Branco
     m_draft = re.search(r'\[(?:Preenchido por|Inserir|A definir|TBD|XXX|\?\?\?)[^\]]*\]|Preenchido por Compras', text, re.IGNORECASE)
@@ -799,9 +1230,10 @@ def analyze_document_domain_technical(fpath: str, skills_ativas: list = None) ->
     evitando sobreposição com specialized_controls.py e advanced_specialized_controls.py.
     """
     filename = os.path.basename(fpath)
-    text = extract_text_from_file(fpath)
-    if not text:
+    raw_text = extract_text_from_file(fpath)
+    if not raw_text:
         return []
+    text = strip_non_normative_comments(raw_text)
 
     text_lower = text.lower()
     findings = []
@@ -1231,9 +1663,9 @@ def tool_profile_baseline(lote_path: str = None) -> str:
         lotes = [entrada_dir]
         mode = "single"
 
-    IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.svg', '.drawio', '.bmp', '.gif'}
-    XLSX_EXTS = {'.xlsx', '.xls', '.csv'}
-    DOC_EXTS = {'.docx', '.pdf', '.txt', '.md', '.json', '.yaml', '.yml'}
+    IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.svg', '.drawio', '.vsdx', '.bmp', '.gif', '.webp', '.tif', '.tiff'}
+    XLSX_EXTS = {'.xlsx', '.xls', '.ods', '.csv', '.tsv'}
+    DOC_EXTS = {'.docx', '.pdf', '.pptx', '.odt', '.txt', '.md', '.json', '.yaml', '.yml', '.html', '.htm', '.xml'}
 
     def profile_lote(lote_dir: str) -> dict:
         text_corpus = ""
@@ -1258,14 +1690,13 @@ def tool_profile_baseline(lote_path: str = None) -> str:
 
                 if ext in IMAGE_EXTS:
                     images.append(fname)
+                    if ext in ('.vsdx', '.svg', '.drawio'):
+                        text_corpus += " " + get_file_text(fpath)[:100000].lower()
                 elif ext in XLSX_EXTS:
                     xlsx_files.append(fname)
-                    if ext == '.xlsx':
-                        # Extrai texto das planilhas para análise semântica
-                        data = extract_xlsx_data(fpath)
-                        for sheet_rows in data.values():
-                            for row in sheet_rows[:50]:
-                                text_corpus += " " + " ".join(str(c).lower() for c in row)
+                    text_corpus += " " + get_file_text(fpath)[:100000].lower()
+                    if ext == '.ods' and not has_embedded and has_embedded_images(fpath, ext):
+                        has_embedded = True
                 elif ext in DOC_EXTS:
                     doc_files.append(fname)
                     text = get_file_text(fpath)
@@ -1792,6 +2223,9 @@ def _extract_semantic_review_text(fpath: str) -> str:
                 page_text = (page.extract_text() or "").strip()
                 if page_text:
                     parts.append(f"[Página PDF {index}]\n{page_text}")
+                annots = _extract_pdf_annotations(page, index)
+                if annots:
+                    parts.append("\n".join(annots))
             return "\n\n".join(parts)
         except Exception:
             return ""
@@ -1808,6 +2242,8 @@ def _extract_semantic_review_text(fpath: str) -> str:
             for sheet_name, rows in sheets.items():
                 for row_index, row in enumerate(rows, 1):
                     parts.append(f"[Planilha {sheet_name} · linha {row_index}] " + " | ".join(row))
+            if ext == ".xlsx":
+                parts.extend(extract_xlsx_comments(fpath))
             return "\n".join(parts)
         except Exception:
             return ""
