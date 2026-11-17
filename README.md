@@ -57,11 +57,19 @@ flowchart TD
 │       ├── analisar-planilha/           # Planilhas .xlsx e .csv
 │       └── analisar-rfp/                # Requests for Proposal (RFPs e RFIs)
 ├── mcp-server/
-│   ├── server.py                        # Servidor MCP: extração, controles e persistência auditável
+│   ├── server.py                        # Servidor MCP: extração, controles e persistência auditável (20 ferramentas)
+│   ├── audit_engine.py                  # Motor de cálculo dinâmico de IQD, parecer e reconciliação de versões
+│   ├── audit_pipeline.py                # Normalização, sanitização de lote e conflitos cruzados
 │   ├── semantic_pipeline.py             # Contrato de evidência e escopos da revisão semântica
-│   ├── audit_engine.py                  # Motor de cálculo dinâmico de IQD e parecer
-│   ├── html_compiler.py                 # Compilador HTML corporativo consolidado
-│   └── requirements.txt                 # openpyxl, pypdf
+│   ├── visual_pipeline.py               # Extração, renderização e inventário de ativos visuais
+│   ├── specialized_controls.py          # Controles determinísticos especializados (Carrier, Datacenter, LGPD, Contratos)
+│   ├── advanced_specialized_controls.py # Controles avançados (HLD, LLD, Cloud, Integrações)
+│   ├── cross_document.py                # Verificações cruzadas entre documentos do lote
+│   ├── tabular_visual_controls.py       # Cruzamento tabular de planilhas e referências visuais
+│   ├── xlsx_fallback.py                 # Leitor nativo de planilhas .xlsx sem dependências externas
+│   ├── html_compiler.py                 # Compilador HTML corporativo consolidado (8 seções)
+│   ├── tests/                           # Suíte de testes unitários
+│   └── requirements.txt                 # openpyxl, pypdf, Pillow
 ├── framework/
 │   ├── revisao.md                       # Procedimento FCA-ENG-001
 │   ├── checklists/                      # 26 checklists por domínio
@@ -116,10 +124,10 @@ entrada/
 ### Prompt de Início Recomendado
 
 > *"Execute a Revisão Técnica Independente do lote `lote-exemplo-rfp` em `entrada/` aplicando o procedimento FCA-ENG-001 (`framework/revisao.md`).  
-> 1. Execute `profile_baseline` para identificar domínios, checklists e skills recomendadas.  
-> 2. Apresente o plano de triagem e aguarde minha confirmação.  
-> 3. Após confirmação: gere o timestamp, calcule os hashes SHA-256 e execute a análise completa.  
-> 4. Gere os entregáveis em `analise/<timestamp>/relatorios/` (`dados_analise.json` e `index.html`).  
+> 1. Execute `profile_baseline` para identificar domínios, checklists e ativar 100% das skills recomendadas (modo autônomo por padrão; caso eu solicite validação prévia, apresente o plano de triagem e aguarde confirmação).  
+> 2. Execute `run_full_audit` para congelar a baseline (SHA-256), aplicar os controles determinísticos e extrair o inventário visual.  
+> 3. Conclua a revisão semântica (`get_semantic_review_manifest` / `get_semantic_document_chunk` / `record_semantic_analysis`), a inspeção visual quando aplicável (`get_visual_assets` / `record_visual_analysis`) e a adjudicação (`adjudicate_findings`).  
+> 4. Valide os entregáveis em `analise/<lote>/<version>/<timestamp>/relatorios/` (`dados_analise.json` e `index.html`) via `validate_analise_contract`.  
 > 5. Execute `finalize_execution` para arquivar o lote e atualizar a Central."*
 
 ### 🛠️ Skills Especializadas
@@ -165,18 +173,27 @@ entrada/
 }
 ```
 
-**Ferramentas expostas:**
-- `profile_baseline` — triagem semântica adaptativa e diagnóstico do ambiente
-- `check_environment` — auditoria de pacotes Python e utilitários do SO (poppler-utils, tesseract-ocr)
-- `freeze_baseline` — hashes SHA-256 por lote
-- `extract_docx_summary` — estrutura de .docx
-- `extract_xlsx_summary` — abas e dados de .xlsx
+**Ferramentas expostas (20):**
+- `profile_baseline` — triagem semântica adaptativa e diagnóstico de domínios/checklists com geração de `entrada/decisoes.yaml`
+- `check_environment` — auditoria de pacotes Python e utilitários do SO (`poppler-utils`, `tesseract-ocr`, etc.)
+- `freeze_baseline` — hashes SHA-256 e inventário imutável por lote
+- `run_full_audit` — executa auditoria isolada, extrai inventário visual e gera `dados_analise.json` / `index.html` iniciais
+- `analyze_structural_integrity` — verificação determinística dos 7 pilares estruturais e redacionais
+- `get_visual_assets` — retorna blocos MCP de imagem extraídos/renderizados para inspeção multimodal
+- `record_visual_analysis` — persiste ativos revisados e achados visuais (com confronto `texto_afirmado` × `diagrama_demonstrado`)
+- `get_semantic_review_manifest` — plano de escopos Skill × Documento para a revisão semântica
+- `get_semantic_document_chunk` — leitura paginada e rastreável por SHA-256 dos documentos da baseline
+- `record_semantic_analysis` — persiste escopos e achados semânticos com validação de citações literais e evidências E2/E3
+- `adjudicate_findings` — confirma, exclui por falso positivo/escopo/duplicidade ou mantém pendente com trilha de auditoria e evidências
+- `create_review_revision` — cria nova rodada de revisão/adjudicação humana preservando histórico e baseline
+- `reconcile_versions` — compara versões sucessivas gerando diff evolutivo (sanados, reincidentes, novos e variação do IQD)
+- `extract_docx_summary` — estrutura, parágrafos, tabelas e mídias de `.docx`
+- `extract_xlsx_summary` — abas, cabeçalhos e amostra de dados de `.xlsx`
 - `validate_analise_contract` — verifica a presença de `index.html` e `dados_analise.json` e a cobertura das skills recomendadas
-- `finalize_execution` — arquiva o lote e atualiza a Central
-- `build_master_index` — recompila `analise/index.html`
-- `get_semantic_review_manifest` / `get_semantic_document_chunk` / `record_semantic_analysis` — planejam e registram revisões especializadas com citações verificadas
-- `adjudicate_findings` — confirma, exclui por falso positivo/escopo/duplicidade ou mantém pendente com trilha de auditoria
-- `scaffold_skill` — cria rascunho de nova skill
+- `build_run_index_html` — recompila o dashboard HTML individual a partir do `dados_analise.json` SSOT
+- `finalize_execution` — arquiva o lote em `analise/<lote>/<version>/<timestamp>/entrada/` e atualiza a Central
+- `build_master_index` — recompila `analise/index.html` e `analise/manifest.json`
+- `scaffold_skill` — cria rascunho de nova skill em `.agents/skills/`
 
 ---
 

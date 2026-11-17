@@ -265,15 +265,19 @@ def _build_resumo_html(data_json: dict) -> str:
     resumo_md = data_json.get("resumo_md", "").strip()
     if resumo_md and not data_json.get("adjudication_summary"):
         return _md_to_html_simple(resumo_md, linkify_ids=True)
-    
-    parecer = data_json.get("parecer", "APTO COM RESSALVAS")
+
+    parecer = html.escape(str(data_json.get("parecer", "APTO COM RESSALVAS")))
     kpis = data_json.get("kpis", {})
     baseline_files = data_json.get("baseline_files", [])
     skills_ativas = data_json.get("skills_ativas", ["analisar-documento"])
-    timestamp = data_json.get("timestamp", "—")
-    title = data_json.get("title", "Revisão Técnica Independente")
+    timestamp = html.escape(str(data_json.get("timestamp", "—")))
+    title = html.escape(str(data_json.get("title", "Revisão Técnica Independente")))
     coverage = data_json.get("cobertura_extracao", {})
-    coverage_html = f"<tr><td>Arquivos extraídos com texto</td><td><strong>{coverage.get('extraidos', 0)}</strong> de {coverage.get('total_arquivos', len(baseline_files))}</td></tr><tr><td>Arquivos não verificáveis</td><td><strong>{coverage.get('nao_verificaveis', 0)}</strong></td></tr>"
+    coverage_html = (
+        f"<tr><td>Arquivos extraídos com texto</td><td><strong>{int(coverage.get('extraidos', 0))}</strong> "
+        f"de {int(coverage.get('total_arquivos', len(baseline_files)))}</td></tr>"
+        f"<tr><td>Arquivos não verificáveis</td><td><strong>{int(coverage.get('nao_verificaveis', 0))}</strong></td></tr>"
+    )
     semantic = data_json.get("semantic_analysis", {})
     semantic_status = html.escape(str(semantic.get("status", "não iniciada")))
     semantic_reviewed = int(semantic.get("reviewed_scope_count", len(semantic.get("reviewed_scopes", [])) or 0))
@@ -281,23 +285,16 @@ def _build_resumo_html(data_json: dict) -> str:
     semantic_html = f"<tr><td>Revisão semântica especializada</td><td><strong>{semantic_status}</strong> · {semantic_reviewed} de {semantic_expected} escopos</td></tr>"
     pending = int(kpis.get("achados_pendentes_adjudicacao", 0))
     adjudication_note = (
-        f'<div class="ssot-intro-note"><strong>Adjudicação:</strong> {kpis.get("achados_confirmados", 0)} confirmado(s), '
-        f'{pending} pendente(s) e {kpis.get("achados_excluidos", 0)} excluído(s) com justificativa. '
+        f'<div class="ssot-intro-note"><strong>Adjudicação:</strong> {int(kpis.get("achados_confirmados", 0))} confirmado(s), '
+        f'{pending} pendente(s) e {int(kpis.get("achados_excluidos", 0))} excluído(s) com justificativa. '
         + ("O parecer permanece pendente; candidatos não revisados não contam como riscos confirmados." if pending else "O parecer considera somente achados confirmados.")
         + "</div>"
     )
 
-    baseline_rows = ""
-    for bf in baseline_files:
-        name = bf.get("name", bf.get("filename", "—"))
-        size = bf.get("size_bytes", bf.get("size", 0))
-        h = bf.get("sha256", "—")
-        baseline_rows += f"<tr><td><code>{name}</code></td><td>{size} bytes</td><td><code>{h}</code></td></tr>"
-
-    if not baseline_rows:
-        baseline_rows = '<tr><td colspan="3">Nenhum arquivo de baseline registrado.</td></tr>'
-
-    skills_badges = "".join([f'<span class="badge-skill" style="display:inline-block; margin:4px; padding:6px 12px; background:var(--primary-light); color:var(--primary); border-radius:6px; font-weight:600;"><i class="fa-solid fa-microchip"></i> {s}</span>' for s in skills_ativas])
+    skills_badges = "".join([
+        f'<span class="badge-skill" style="display:inline-block; margin:4px; padding:6px 12px; background:var(--primary-light); color:var(--primary); border-radius:6px; font-weight:600;"><i class="fa-solid fa-microchip"></i> {html.escape(str(s))}</span>'
+        for s in skills_ativas
+    ])
 
     reconciliation_html = ""
     vr = data_json.get("version_reconciliation")
@@ -309,6 +306,38 @@ def _build_resumo_html(data_json: dict) -> str:
         n_nov = int(vr.get("novos_achados_count", 0))
         taxa_res = html.escape(str(vr.get("taxa_resolucao_pct", 0)))
         delta_iqd = html.escape(str(vr.get("delta_iqd", "—")))
+
+        sanados_rows = ""
+        for item in vr.get("sanados", []):
+            s_id = html.escape(str(item.get("id_anterior", "—")))
+            s_tit = html.escape(str(item.get("title") or item.get("titulo") or "—"))
+            s_crit = html.escape(str(item.get("criticidade", "Média")))
+            s_loc = html.escape(str(item.get("loc") or item.get("localizacao") or "—"))
+            sanados_rows += f"<tr><td><code>{s_id}</code></td><td>{s_tit}</td><td>{s_crit}</td><td>{s_loc}</td></tr>"
+
+        reincidentes_rows = ""
+        for item in vr.get("reincidentes", []):
+            r_id_ant = html.escape(str(item.get("id_anterior", "—")))
+            r_id_atu_raw = str(item.get("id_atual", "—"))
+            r_id_atu = html.escape(r_id_atu_raw)
+            r_id_href = html.escape(r_id_atu_raw, quote=True)
+            r_link = f'<a href="#card-{r_id_href}" class="ssot-link">{r_id_atu}</a>' if r_id_atu_raw != "—" else "—"
+            r_tit = html.escape(str(item.get("title") or item.get("titulo") or "—"))
+            r_crit = html.escape(str(item.get("criticidade", "Média")))
+            r_loc = html.escape(str(item.get("loc_atual") or item.get("localizacao_atual") or "—"))
+            reincidentes_rows += f"<tr><td><code>{r_id_ant}</code> → {r_link}</td><td>{r_tit}</td><td>{r_crit}</td><td>{r_loc}</td></tr>"
+
+        novos_rows = ""
+        for item in vr.get("novos", []):
+            n_id_raw = str(item.get("id_atual", "—"))
+            n_id = html.escape(n_id_raw)
+            n_id_href = html.escape(n_id_raw, quote=True)
+            n_link = f'<a href="#card-{n_id_href}" class="ssot-link">{n_id}</a>' if n_id_raw != "—" else "—"
+            n_tit = html.escape(str(item.get("title") or item.get("titulo") or "—"))
+            n_crit = html.escape(str(item.get("criticidade", "Média")))
+            n_loc = html.escape(str(item.get("loc") or item.get("localizacao") or "—"))
+            novos_rows += f"<tr><td>{n_link}</td><td>{n_tit}</td><td>{n_crit}</td><td>{n_loc}</td></tr>"
+
         reconciliation_html = f"""
         <h4 style="margin-top:25px;">Quadro de Reconciliação Técnica e Evolução (Diff de Achados)</h4>
         <div class="ssot-intro-note">
@@ -329,6 +358,27 @@ def _build_resumo_html(data_json: dict) -> str:
                 <tr><td>Variação do IQD (Delta)</td><td><strong>{delta_iqd}</strong></td></tr>
             </tbody>
         </table>
+        <details style="margin-top:12px;">
+            <summary style="cursor:pointer; font-weight:700; color:var(--success);">🟢 Achados Sanados / Resolvidos ({n_san})</summary>
+            <div class="table-responsive"><table class="rpt-table">
+                <thead><tr><th>ID Anterior</th><th>Título</th><th>Criticidade</th><th>Localização Anterior</th></tr></thead>
+                <tbody>{sanados_rows or '<tr><td colspan="4">Nenhum achado sanado nesta comparação.</td></tr>'}</tbody>
+            </table></div>
+        </details>
+        <details style="margin-top:10px;">
+            <summary style="cursor:pointer; font-weight:700; color:var(--warning);">🟠 Achados Reincidentes / Persistentes ({n_rei})</summary>
+            <div class="table-responsive"><table class="rpt-table">
+                <thead><tr><th>ID Anterior → ID Atual</th><th>Título</th><th>Criticidade</th><th>Localização Atual</th></tr></thead>
+                <tbody>{reincidentes_rows or '<tr><td colspan="4">Nenhum achado reincidente nesta comparação.</td></tr>'}</tbody>
+            </table></div>
+        </details>
+        <details style="margin-top:10px;">
+            <summary style="cursor:pointer; font-weight:700; color:var(--danger);">🔴 Novos Achados / Regressões ({n_nov})</summary>
+            <div class="table-responsive"><table class="rpt-table">
+                <thead><tr><th>ID Atual</th><th>Título</th><th>Criticidade</th><th>Localização</th></tr></thead>
+                <tbody>{novos_rows or '<tr><td colspan="4">Nenhum novo achado nesta comparação.</td></tr>'}</tbody>
+            </table></div>
+        </details>
         """
 
     return f"""
@@ -358,26 +408,17 @@ def _build_resumo_html(data_json: dict) -> str:
                 <tr><td>Riscos Identificados</td><td><strong>{kpis.get("riscos", 0)}</strong></td></tr>
                 <tr><td>Minutas / Erratas Sugeridas</td><td>{kpis.get("redacoes", 0)}</td></tr>
                 <tr><td>Perguntas Formais (Q-XXX)</td><td>{kpis.get("perguntas", 0)}</td></tr>
-                <tr><td>Índice IQD (Qualidade Documental)</td><td><strong style="color:var(--success);">{kpis.get("iqd", "100%")}</strong></td></tr>
+                <tr><td>Índice IQD (Qualidade Documental)</td><td><strong style="color:var(--success);">{html.escape(str(kpis.get("iqd", "100%")))}</strong></td></tr>
                 {coverage_html}
                 {semantic_html}
             </tbody>
         </table>
         {reconciliation_html}
         
-        <h4 style="margin-top:25px;">Baseline de Documentos de Entrada</h4>
-        <table class="rpt-table">
-            <thead>
-                <tr>
-                    <th>Nome do Arquivo</th>
-                    <th>Tamanho</th>
-                    <th>Hash SHA-256</th>
-                </tr>
-            </thead>
-            <tbody>
-                {baseline_rows}
-            </tbody>
-        </table>
+        <div class="ssot-intro-note" style="margin-top:22px;">
+            <i class="fa-solid fa-fingerprint"></i> <strong>Baseline Auditada:</strong> {len(baseline_files)} arquivo(s) congelado(s) com hash criptográfico.
+            <a href="#rastreabilidade" class="ssot-link">Consultar inventário completo e hashes SHA-256 na Seção 8</a>
+        </div>
         
         <h4 style="margin-top:25px;">Skills e Agentes Especializados Ativados</h4>
         <div class="skills-grid" style="margin-top:10px;">
@@ -403,35 +444,48 @@ def _build_acoes_html(data_json: dict) -> str:
     act_rows = ""
     if redacoes:
         for idx, r in enumerate(redacoes, 1):
-            aid = r.get("id", f"ACT-{idx:03d}")
-            achado_id = r.get("achado_id", r.get("achado", "—"))
-            achado_link = f'<a href="#card-{achado_id}" class="ssot-link">{achado_id}</a>' if achado_id != "—" else "—"
-            desc = r.get("acao", r.get("descricao", "—"))
-            prio = r.get("prio", r.get("prioridade", "P2"))
-            resp = r.get("responsavel", r.get("proprietario", "Equipe Técnica"))
+            aid = html.escape(str(r.get("id", f"ACT-{idx:03d}")))
+            achado_id_raw = str(r.get("achado_id", r.get("achado", "—")))
+            achado_link = (
+                f'<a href="#card-{html.escape(achado_id_raw, quote=True)}" class="ssot-link">{html.escape(achado_id_raw)}</a>'
+                if achado_id_raw != "—" else "—"
+            )
+            desc = html.escape(str(r.get("acao", r.get("descricao", "—"))))
+            prio = html.escape(str(r.get("prio", r.get("prioridade", "P2"))))
+            resp = html.escape(str(r.get("responsavel", r.get("proprietario", "Equipe Técnica"))))
             act_rows += f"<tr><td><strong>{aid}</strong></td><td>{achado_link}</td><td>{desc}</td><td><span class='badge-prio'>{prio}</span></td><td>{resp}</td></tr>"
     else:
         for idx, f in enumerate(_confirmed_findings(findings), 1):
             if f.get("solucao"):
-                fid = f.get("id", "ACH-000")
-                act_rows += f"<tr><td><strong>ACT-{idx:03d}</strong></td><td><a href='#card-{fid}' class='ssot-link'>{fid}</a></td><td>{f['solucao']}</td><td><span class='badge-prio'>{f.get('prioridade','P2')}</span></td><td>{f.get('proprietario','Proprietário Técnico')}</td></tr>"
+                fid_raw = str(f.get("id", "ACH-000"))
+                fid_esc = html.escape(fid_raw)
+                fid_href = html.escape(fid_raw, quote=True)
+                sol_txt = html.escape(str(f["solucao"]))
+                prio_txt = html.escape(str(f.get("prioridade", "P2")))
+                prop_txt = html.escape(str(f.get("proprietario", "Proprietário Técnico")))
+                act_rows += f"<tr><td><strong>ACT-{idx:03d}</strong></td><td><a href='#card-{fid_href}' class='ssot-link'>{fid_esc}</a></td><td>{sol_txt}</td><td><span class='badge-prio'>{prio_txt}</span></td><td>{prop_txt}</td></tr>"
 
     if not act_rows:
         act_rows = '<tr><td colspan="5">Nenhum plano de ação registrado separadamente. Consulte as Fichas 360°.</td></tr>'
 
     q_rows = ""
     for idx, esc in enumerate(esclarecimentos, 1):
-        qid = esc.get("id") or esc.get("id_pergunta") or f"Q-{idx:03d}"
-        doc = esc.get("doc") or esc.get("doc_ref") or esc.get("documento") or "—"
-        secao = esc.get("secao_ref") or ""
-        doc_display = f"{doc} ({secao})" if secao and secao != doc and secao not in doc else doc
-        perg = esc.get("pergunta") or "—"
-        imp = esc.get("impacto") or esc.get("justificativa") or esc.get("contexto") or "—"
-        dest = esc.get("destinatario") or "Comissão Técnica"
-        q_rows += f"<tr><td><strong>{qid}</strong></td><td><code>{doc_display}</code></td><td>{perg}</td><td>{imp}</td><td>{dest}</td></tr>"
+        qid = html.escape(str(esc.get("id") or esc.get("id_pergunta") or f"Q-{idx:03d}"))
+        fid_raw = str(esc.get("finding_id") or "").strip()
+        fid_link = (
+            f'<a href="#card-{html.escape(fid_raw, quote=True)}" class="ssot-link">{html.escape(fid_raw)}</a>'
+            if fid_raw else "—"
+        )
+        doc = str(esc.get("doc") or esc.get("doc_ref") or esc.get("documento") or "—")
+        secao = str(esc.get("secao_ref") or "")
+        doc_display = html.escape(f"{doc} ({secao})" if secao and secao != doc and secao not in doc else doc)
+        perg = html.escape(str(esc.get("pergunta") or "—"))
+        imp = html.escape(str(esc.get("impacto") or esc.get("justificativa") or esc.get("contexto") or "—"))
+        dest = html.escape(str(esc.get("destinatario") or "Comissão Técnica"))
+        q_rows += f"<tr><td><strong>{qid}</strong></td><td>{fid_link}</td><td><code>{doc_display}</code></td><td>{perg}</td><td>{imp}</td><td>{dest}</td></tr>"
 
     if not q_rows:
-        q_rows = '<tr><td colspan="5">Nenhuma pergunta formal registrada nesta auditoria.</td></tr>'
+        q_rows = '<tr><td colspan="6">Nenhuma pergunta formal registrada nesta auditoria.</td></tr>'
 
     return f"""
     <div class="acoes-perguntas-container">
@@ -459,6 +513,7 @@ def _build_acoes_html(data_json: dict) -> str:
                 <thead>
                     <tr>
                         <th>ID Pergunta</th>
+                        <th>Achado Vinculado</th>
                         <th>Documento / Seção</th>
                         <th>Pergunta Formal</th>
                         <th>Impacto se não Esclarecido</th>
@@ -483,44 +538,57 @@ def _build_lacunas_html(data_json: dict) -> str:
     riscos = data_json.get("riscos", [])
     findings = data_json.get("findings", [])
 
+    lac_items = lacunas if lacunas else [
+        f for f in _confirmed_findings(findings)
+        if "lacuna" in str(f.get("tipo", "")).lower()
+        or "lacuna" in str(f.get("categoria", "")).lower()
+        or "omissão" in str(f.get("tipo", "")).lower()
+    ]
     lac_rows = ""
-    if lacunas:
-        for idx, lac in enumerate(lacunas, 1):
-            lid = lac.get("id", f"LAC-{idx:03d}")
-            doc = lac.get("doc", lac.get("documento", "—"))
-            desc = lac.get("descricao", lac.get("titulo", "—"))
-            crit = lac.get("crit", lac.get("criticidade", "Média"))
-            mitig = lac.get("mitigacao", lac.get("acao_sugerida", "Formular pergunta formal."))
-            c_class = "crit-critica" if "crítica" in crit.lower() else "crit-alta" if "alta" in crit.lower() else "crit-media"
-            lac_rows += f"<tr><td><strong>{lid}</strong></td><td><code>{doc}</code></td><td>{desc}</td><td><span class='badge-crit {c_class}'>{crit}</span></td><td>{mitig}</td></tr>"
-    else:
-        lac_findings = [f for f in _confirmed_findings(findings) if "lacuna" in f.get("tipo","").lower() or "lacuna" in f.get("categoria","").lower() or "omissão" in f.get("tipo","").lower()]
-        for f in lac_findings:
-            fid = f.get("id", "ACH-000")
-            crit = f.get("criticidade", "Média")
-            c_class = "crit-critica" if "crítica" in crit.lower() else "crit-alta" if "alta" in crit.lower() else "crit-media"
-            lac_rows += f"<tr><td><a href='#card-{fid}' class='ssot-link'>{fid}</a></td><td><code>{f.get('doc_origem','—')}</code></td><td>{f['title']} — {f.get('fato','')}</td><td><span class='badge-crit {c_class}'>{crit}</span></td><td>{f.get('solucao','Solicitar esclarecimento.')}</td></tr>"
+    for idx, lac in enumerate(lac_items, 1):
+        lid_raw = str(lac.get("id") or f"LAC-{idx:03d}")
+        lid_esc = html.escape(lid_raw)
+        lid_href = html.escape(lid_raw, quote=True)
+        lid_cell = f'<a href="#card-{lid_href}" class="ssot-link">{lid_esc}</a>' if lac.get("id") else f'<strong>{lid_esc}</strong>'
+        doc_raw = str(lac.get("doc_origem") or lac.get("doc") or lac.get("documento") or "—")
+        loc_raw = str(lac.get("loc") or lac.get("localizacao") or "").strip()
+        doc_display = html.escape(f"{doc_raw} ({loc_raw})" if loc_raw and loc_raw != "—" and loc_raw not in doc_raw else doc_raw)
+        title_txt = str(lac.get("title") or lac.get("descricao") or lac.get("titulo") or "").strip()
+        fato_txt = str(lac.get("fato") or "").strip()
+        desc_raw = f"{title_txt} — {fato_txt}" if (title_txt and fato_txt and title_txt != fato_txt) else (title_txt or fato_txt or "—")
+        desc = html.escape(desc_raw)
+        crit_raw = str(lac.get("criticidade") or lac.get("crit") or "Média")
+        crit = html.escape(crit_raw)
+        c_class = (
+            "crit-critica" if "crítica" in crit_raw.lower()
+            else "crit-alta" if "alta" in crit_raw.lower()
+            else "crit-media" if ("média" in crit_raw.lower() or "media" in crit_raw.lower())
+            else "crit-baixa"
+        )
+        mitig = html.escape(str(lac.get("solucao") or lac.get("mitigacao") or lac.get("acao_sugerida") or "Solicitar esclarecimento formal."))
+        lac_rows += f"<tr><td>{lid_cell}</td><td><code>{doc_display}</code></td><td>{desc}</td><td><span class='badge-crit {c_class}'>{crit}</span></td><td>{mitig}</td></tr>"
 
     if not lac_rows:
-        lac_rows = '<tr><td colspan="5">Nenhuma lacuna registrada nesta análise.</td></tr>'
+        lac_rows = '<tr><td colspan="5">Nenhuma lacuna confirmada registrada nesta análise.</td></tr>'
 
+    rsc_items = riscos if riscos else [
+        f for f in _confirmed_findings(findings)
+        if "risco" in str(f.get("tipo", "")).lower() or "risco" in str(f.get("categoria", "")).lower()
+    ]
     rsc_rows = ""
-    if riscos:
-        for idx, rsc in enumerate(riscos, 1):
-            rid = rsc.get("id", f"RSC-{idx:03d}")
-            ev = rsc.get("evento", rsc.get("titulo", "—"))
-            prob = rsc.get("prob", rsc.get("probabilidade", "Média"))
-            imp = rsc.get("impacto", "Médio")
-            mitig = rsc.get("mitigacao", "—")
-            rsc_rows += f"<tr><td><strong>{rid}</strong></td><td>{ev}</td><td>{prob}</td><td>{imp}</td><td>{mitig}</td></tr>"
-    else:
-        rsc_findings = [f for f in _confirmed_findings(findings) if "risco" in f.get("tipo","").lower() or "risco" in f.get("categoria","").lower()]
-        for f in rsc_findings:
-            fid = f.get("id", "ACH-000")
-            rsc_rows += f"<tr><td><a href='#card-{fid}' class='ssot-link'>{fid}</a></td><td>{f['title']}</td><td>Média</td><td>{f.get('impacto','Médio')}</td><td>{f.get('solucao','—')}</td></tr>"
+    for idx, rsc in enumerate(rsc_items, 1):
+        rid_raw = str(rsc.get("id") or f"RSC-{idx:03d}")
+        rid_esc = html.escape(rid_raw)
+        rid_href = html.escape(rid_raw, quote=True)
+        rid_cell = f'<a href="#card-{rid_href}" class="ssot-link">{rid_esc}</a>' if rsc.get("id") else f'<strong>{rid_esc}</strong>'
+        ev = html.escape(str(rsc.get("evento") or rsc.get("title") or rsc.get("titulo") or "—"))
+        prob = html.escape(str(rsc.get("prob") or rsc.get("probabilidade") or rsc.get("criticidade") or "Média"))
+        imp = html.escape(str(rsc.get("impacto") or "Médio"))
+        mitig = html.escape(str(rsc.get("solucao") or rsc.get("mitigacao") or "—"))
+        rsc_rows += f"<tr><td>{rid_cell}</td><td>{ev}</td><td>{prob}</td><td>{imp}</td><td>{mitig}</td></tr>"
 
     if not rsc_rows:
-        rsc_rows = '<tr><td colspan="5">Nenhum risco registrado separadamente. Consulte as Fichas 360°.</td></tr>'
+        rsc_rows = '<tr><td colspan="5">Nenhum risco confirmado registrado separadamente. Consulte as Fichas 360°.</td></tr>'
 
     return f"""
     <div class="lacunas-riscos-container">
@@ -574,24 +642,36 @@ def _build_checklists_html(data_json: dict) -> str:
 
     html_out = "<div class='checklists-container'>"
     for chk_name, chk_data in checklists_status.items():
-        html_out += f"<div class='checklist-card' style='margin-bottom:25px;'><h4 style='color:var(--primary);'><i class='fa-solid fa-square-check'></i> Checklist: <code>{chk_name}</code></h4>"
-        if isinstance(chk_data, dict) and "itens" in chk_data:
-            itens = chk_data["itens"]
-            html_out += """<div class='table-responsive'><table class='rpt-table'>
-                <thead><tr><th>Verificação</th><th>Status</th><th>Achado Vinculado</th><th>Evidência</th></tr></thead><tbody>"""
-            for item in itens:
-                st = item.get("status", "").lower().replace(" ", "_")
-                badge_st = '<span class="badge-crit crit-baixa">Conforme</span>' if "conforme" in st and "nao" not in st else \
-                           '<span class="badge-crit crit-critica">Não Conforme</span>' if "nao_conforme" in st else \
-                           '<span class="badge-crit crit-info">N/A</span>'
-                achado_id = item.get("achado", "—")
-                achado_link = f'<a href="#card-{achado_id}" class="ssot-link">{achado_id}</a>' if achado_id and achado_id != "—" else "—"
-                html_out += f"<tr><td>{item.get('verificacao','—')}</td><td>{badge_st}</td><td>{achado_link}</td><td>{item.get('evidencia','—')}</td></tr>"
-            html_out += "</tbody></table></div>"
-        elif isinstance(chk_data, dict):
-            conf = chk_data.get("conformidade_pct", "—")
-            obs = chk_data.get("observacao", "Checklist verificado.")
-            html_out += f"<p><strong>Conformidade:</strong> {conf} | <strong>Observação:</strong> {obs}</p>"
+        safe_chk = html.escape(str(chk_name))
+        html_out += f"<div class='checklist-card' style='margin-bottom:25px;'><h4 style='color:var(--primary);'><i class='fa-solid fa-square-check'></i> Checklist: <code>{safe_chk}</code></h4>"
+        if isinstance(chk_data, dict):
+            conf_raw = str(chk_data.get("conformidade") or chk_data.get("conformidade_pct") or "—")
+            conf_esc = html.escape(conf_raw)
+            obs_esc = html.escape(str(chk_data.get("observacao") or "Checklist verificado."))
+            conf_cf = conf_raw.casefold()
+            conf_cls = (
+                "crit-baixa" if ("conforme" in conf_cf and "não" not in conf_cf and "nao" not in conf_cf)
+                else ("crit-critica" if ("não conforme" in conf_cf or "nao conforme" in conf_cf) else "crit-media")
+            )
+            html_out += f"<p style='margin:6px 0 10px;'><strong>Status:</strong> <span class='badge-crit {conf_cls}'>{conf_esc}</span> &nbsp;|&nbsp; <strong>Observação:</strong> {obs_esc}</p>"
+            itens = chk_data.get("itens") or []
+            if itens:
+                html_out += """<div class='table-responsive'><table class='rpt-table'>
+                    <thead><tr><th>Verificação</th><th>Status</th><th>Achado Vinculado</th><th>Evidência</th></tr></thead><tbody>"""
+                for item in itens:
+                    st = str(item.get("status", "")).lower().replace(" ", "_")
+                    badge_st = '<span class="badge-crit crit-baixa">Conforme</span>' if "conforme" in st and "nao" not in st and "não" not in st else \
+                               '<span class="badge-crit crit-critica">Não Conforme</span>' if ("nao_conforme" in st or "não_conforme" in st) else \
+                               '<span class="badge-crit crit-info">N/A</span>'
+                    achado_raw = str(item.get("achado", "—"))
+                    achado_link = (
+                        f'<a href="#card-{html.escape(achado_raw, quote=True)}" class="ssot-link">{html.escape(achado_raw)}</a>'
+                        if achado_raw and achado_raw != "—" else "—"
+                    )
+                    verif_esc = html.escape(str(item.get("verificacao", "—")))
+                    evid_esc = html.escape(str(item.get("evidencia", "—")))
+                    html_out += f"<tr><td>{verif_esc}</td><td>{badge_st}</td><td>{achado_link}</td><td>{evid_esc}</td></tr>"
+                html_out += "</tbody></table></div>"
         html_out += "</div>"
     html_out += "</div>"
     return html_out
@@ -603,19 +683,127 @@ def _build_rastrea_html(data_json: dict, rel_dir: str = None) -> str:
         return _md_to_html_simple(rastrea_md, linkify_ids=False)
 
     baseline_files = data_json.get("baseline_files", [])
-    timestamp = data_json.get("timestamp", "—")
+    timestamp = html.escape(str(data_json.get("timestamp", "—")))
     skills_ativas = data_json.get("skills_ativas", ["analisar-documento"])
     kpis = data_json.get("kpis", {})
+    findings = data_json.get("findings", [])
 
     b_rows = ""
     for bf in baseline_files:
-        name = bf.get("name", bf.get("filename", "—"))
-        size = bf.get("size_bytes", bf.get("size", 0))
-        h = bf.get("sha256", "—")
+        name = html.escape(str(bf.get("name", bf.get("filename", "—"))))
+        size = int(bf.get("size_bytes", bf.get("size", 0)) or 0)
+        h = html.escape(str(bf.get("sha256", "—")))
         b_rows += f"<tr><td><code>{name}</code></td><td>{size} bytes</td><td><code>{h}</code></td></tr>"
 
     if not b_rows:
         b_rows = '<tr><td colspan="3">Nenhum arquivo de baseline registrado.</td></tr>'
+
+    # Cobertura de Extração por Arquivo
+    coverage = data_json.get("cobertura_extracao", {})
+    cov_files = coverage.get("arquivos", []) if isinstance(coverage, dict) else []
+    cov_rows = ""
+    for cf in cov_files:
+        c_file = html.escape(str(cf.get("arquivo", "—")))
+        c_fmt = html.escape(str(cf.get("formato", "—")))
+        c_st = html.escape(str(cf.get("status", "—")))
+        c_chars = int(cf.get("caracteres_extraidos", 0) or 0)
+        c_aviso = html.escape(str(cf.get("aviso", "") or "—"))
+        cov_rows += f"<tr><td><code>{c_file}</code></td><td><code>{c_fmt}</code></td><td>{c_st}</td><td>{c_chars}</td><td>{c_aviso}</td></tr>"
+    coverage_table_html = ""
+    if cov_files:
+        coverage_table_html = f"""
+        <h3 style="margin-top:35px;">Cobertura de Extração por Arquivo da Baseline</h3>
+        <div class="table-responsive">
+            <table class="rpt-table">
+                <thead>
+                    <tr>
+                        <th>Arquivo</th>
+                        <th>Formato</th>
+                        <th>Status de Extração</th>
+                        <th>Caracteres Extraídos</th>
+                        <th>Observação / Aviso</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {cov_rows}
+                </tbody>
+            </table>
+        </div>"""
+
+    # Matriz de Escopos da Revisão Semântica
+    semantic = data_json.get("semantic_analysis", {})
+    scope_results = semantic.get("scope_results", {}) if isinstance(semantic, dict) else {}
+    required_scopes = semantic.get("required_scopes", []) if isinstance(semantic, dict) else []
+    reviewed_scopes_set = set(semantic.get("reviewed_scopes", []) if isinstance(semantic, dict) else [])
+    all_scope_keys = sorted(set(required_scopes) | set(scope_results.keys()))
+    scope_rows = ""
+    for key in all_scope_keys:
+        if "::" in key:
+            sk_name, doc_p = key.split("::", 1)
+        else:
+            sk_name, doc_p = key, "—"
+        info = scope_results.get(key, {})
+        st_val = info.get("status", "revisado" if key in reviewed_scopes_set else "pendente")
+        just_val = info.get("justificativa") or "—"
+        scope_rows += (
+            f"<tr><td><code>{html.escape(sk_name)}</code></td>"
+            f"<td><code>{html.escape(doc_p)}</code></td>"
+            f"<td>{html.escape(str(st_val))}</td>"
+            f"<td>{html.escape(str(just_val))}</td></tr>"
+        )
+    semantic_matrix_html = ""
+    if all_scope_keys:
+        semantic_matrix_html = f"""
+        <h3 style="margin-top:35px;">Matriz de Escopos da Revisão Semântica (Skill × Documento)</h3>
+        <div class="table-responsive">
+            <table class="rpt-table">
+                <thead>
+                    <tr>
+                        <th>Skill</th>
+                        <th>Documento</th>
+                        <th>Status</th>
+                        <th>Justificativa</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {scope_rows}
+                </tbody>
+            </table>
+        </div>"""
+
+    # Memória de Cálculo do IQD
+    denom = int(kpis.get("iqd_denominador") or max(len(baseline_files) * 15, 30))
+    pesos = {"Crítica": 4, "Alta": 3, "Média": 2, "Baixa": 1, "Informativa": 0}
+    confirmed_list = _confirmed_findings(findings)
+    pending_n = int(kpis.get("achados_pendentes_adjudicacao", 0))
+    impacto_ponderado = sum(pesos.get(a.get("criticidade", a.get("crit", "Média")), 2) for a in confirmed_list)
+    max_impacto = denom * 4
+    iqd_res = html.escape(str(kpis.get("iqd", "—")))
+    iqd_obs = (
+        f"Há {pending_n} achado(s) pendente(s) de adjudicação; o IQD exibe '—' até a conclusão da adjudicação."
+        if pending_n > 0 else
+        f"Calculado sobre {len(confirmed_list)} achado(s) confirmado(s): impacto ponderado = {impacto_ponderado} de máximo {max_impacto} (denominador {denom})."
+    )
+    iqd_memory_html = f"""
+    <h3 style="margin-top:35px;">Memória de Cálculo do Índice de Qualidade Documental (IQD)</h3>
+    <div class="table-responsive">
+        <table class="rpt-table">
+            <thead>
+                <tr>
+                    <th>Parâmetro</th>
+                    <th>Valor / Fórmula</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td>Fórmula Aplicada</td><td><code>IQD = max(0, 100 × (1 − Impacto Ponderado / (Denominador × 4)))</code></td></tr>
+                <tr><td>Pesos por Criticidade</td><td>Crítica = 4 · Alta = 3 · Média = 2 · Baixa = 1 · Informativa = 0</td></tr>
+                <tr><td>Denominador Aplicável</td><td><strong>{denom}</strong> itens (impacto máximo = {max_impacto})</td></tr>
+                <tr><td>População Auditada</td><td>{len(confirmed_list)} confirmado(s) · {pending_n} pendente(s) · {int(kpis.get("achados_excluidos", 0))} excluído(s)</td></tr>
+                <tr><td>Impacto Ponderado</td><td><strong>{impacto_ponderado if pending_n == 0 else "Aguardando adjudicação"}</strong></td></tr>
+                <tr><td>IQD Resultante</td><td><strong>{iqd_res}</strong> — {html.escape(iqd_obs)}</td></tr>
+            </tbody>
+        </table>
+    </div>"""
 
     inventory = data_json.get("visual_inventory", {})
     visual_assets = inventory.get("assets", []) if isinstance(inventory, dict) else []
@@ -650,13 +838,12 @@ def _build_rastrea_html(data_json: dict, rel_dir: str = None) -> str:
     if visual_cards:
         visual_inventory_html = f"""
         <h3 style="margin-top:35px;">Inventário de Imagens e Diagramas</h3>
-        <p><strong>Estado da interpretação visual:</strong> {html.escape(str(visual_status))} · {len(visual_assets)} ativo(s) extraído(s) · {inventory.get('rendered_pdf_pages', 0)} página(s) de PDF renderizada(s).</p>
+        <p><strong>Estado da interpretação visual:</strong> {html.escape(str(visual_status))} · {len(visual_assets)} ativo(s) extraído(s) · {int(inventory.get('rendered_pdf_pages', 0))} página(s) de PDF renderizada(s).</p>
         <div class="visual-assets-grid">{''.join(visual_cards)}</div>
         """
     else:
         visual_inventory_html = f"<h3 style=\"margin-top:35px;\">Inventário de Imagens e Diagramas</h3><p>Nenhum ativo visual extraído. Estado: {html.escape(str(visual_status))}.</p>"
 
-    semantic = data_json.get("semantic_analysis", {})
     semantic_status = html.escape(str(semantic.get("status", "não iniciada")))
     semantic_skills = ", ".join(html.escape(str(skill)) for skill in semantic.get("required_skills", [])) or "nenhuma skill textual aplicável"
     semantic_html = (
@@ -684,17 +871,20 @@ def _build_rastrea_html(data_json: dict, rel_dir: str = None) -> str:
             </table>
         </div>
 
+        {coverage_table_html}
+        {semantic_matrix_html}
+        {iqd_memory_html}
         {visual_inventory_html}
 
         <h3 style="margin-top:35px;">Log Auditável de Execução da RTI</h3>
         <ul class="audit-log-list" style="line-height:1.8;">
             <li><strong>Timestamp de Execução:</strong> <code>{timestamp}</code></li>
-            <li><strong>Skills Ativadas:</strong> {", ".join([f"<code>{s}</code>" for s in skills_ativas])}</li>
+            <li><strong>Skills Ativadas:</strong> {", ".join([f"<code>{html.escape(str(s))}</code>" for s in skills_ativas])}</li>
             {semantic_html}
             <li><strong>Total de Arquivos Analisados:</strong> {len(baseline_files)}</li>
             <li><strong>Total de Achados Auditados:</strong> {kpis.get("total_achados", 0)}</li>
-            <li><strong>Índice IQD Resultante:</strong> <strong>{kpis.get("iqd", "100%")}</strong></li>
-            <li><strong>Parecer Final Emitido:</strong> <strong>{data_json.get("parecer", "APTO COM RESSALVAS")}</strong></li>
+            <li><strong>Índice IQD Resultante:</strong> <strong>{iqd_res}</strong></li>
+            <li><strong>Parecer Final Emitido:</strong> <strong>{html.escape(str(data_json.get("parecer", "APTO COM RESSALVAS")))}</strong></li>
         </ul>
     </div>
     """
@@ -758,6 +948,14 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
         kpis["baixos"] = sum(1 for item in confirmed_findings if str(item.get("criticidade", item.get("crit", ""))).casefold() in ("baixa", "informativa"))
         kpis["lacunas"] = sum(1 for item in confirmed_findings if "lacuna" in str(item.get("tipo", "")).casefold())
         kpis["riscos"] = sum(1 for item in confirmed_findings if "risco" in str(item.get("tipo", "")).casefold())
+        kpis["estruturais"] = sum(
+            1
+            for item in confirmed_findings
+            if any(
+                token in f"{item.get('tipo', '')} {item.get('categoria', item.get('cat', ''))}".casefold()
+                for token in ("estrutur", "errata", "redacional", "rfc", "29148")
+            )
+        )
         data_json["kpis"] = kpis
         data_json["adjudication_summary"] = adjudication_counts
         data_json["lacunas"] = [item for item in confirmed_findings if "lacuna" in str(item.get("tipo", "")).casefold()]
@@ -861,19 +1059,19 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
         ssot_table_rows += f"""
         <tr>
           <td>
-            <a href="#card-{fid}" class="ssot-link" title="Clique para ir ao detalhamento da Ficha 360°">
-              <i class="fa-solid fa-circle-chevron-right"></i> <strong>{fid}</strong>
+            <a href="#card-{html.escape(str(fid), quote=True)}" class="ssot-link" title="Clique para ir ao detalhamento da Ficha 360°">
+              <i class="fa-solid fa-circle-chevron-right"></i> <strong>{html.escape(str(fid))}</strong>
             </a>
           </td>
-          <td><strong>{f.get('title','')}</strong></td>
-          <td><code>{f.get('doc_origem','—')}</code></td>
-          <td>{f.get('loc','—')}</td>
-          <td>{f.get('categoria','—')}</td>
-          <td><span class="badge-tipo">{tipo}</span></td>
-          <td><span class="badge-crit {c_class}">{crit}</span></td>
-          <td><span class="badge-prio">{prio}</span></td>
-          <td><span class="badge-adjudication {adjudication_class}">{adjudication_label}</span></td>
-          <td>{f.get('proprietario','—')}</td>
+          <td><strong>{html.escape(str(f.get('title','') or ''))}</strong></td>
+          <td><code>{html.escape(str(f.get('doc_origem') or '—'))}</code></td>
+          <td>{html.escape(str(f.get('loc') or '—'))}</td>
+          <td>{html.escape(str(f.get('categoria') or f.get('cat') or '—'))}</td>
+          <td><span class="badge-tipo">{html.escape(str(tipo))}</span></td>
+          <td><span class="badge-crit {c_class}">{html.escape(str(crit))}</span></td>
+          <td><span class="badge-prio">{html.escape(str(prio))}</span></td>
+          <td><span class="badge-adjudication {adjudication_class}">{html.escape(str(adjudication_label))}</span></td>
+          <td>{html.escape(str(f.get('proprietario') or '—'))}</td>
         </tr>"""
 
     ssot_table_html = f"""
@@ -906,25 +1104,45 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
     """
 
     # Seção 4: Tabela Estruturada de Erratas (De → Para) com IDs Clicáveis
-    erratas_findings = [f for f in findings if f.get("is_direct") or "→" in f.get("tipo","") or "grafia" in f.get("tipo","").lower() or "sequência" in f.get("tipo","").lower() or f.get("de")]
+    _empty_errata_vals = {"", "—", "-", "não disponível", "nao disponivel", "n/a"}
+    erratas_findings = [
+        f
+        for f in findings
+        if _adjudication_status(f) not in {"falso_positivo", "fora_de_escopo", "duplicado"}
+        and (
+            str(f.get("de", "") or "").strip().casefold() not in _empty_errata_vals
+            or str(f.get("para", "") or "").strip().casefold() not in _empty_errata_vals
+        )
+        and (
+            f.get("is_direct")
+            or "→" in str(f.get("tipo", ""))
+            or "grafia" in str(f.get("tipo", "")).lower()
+            or "sequência" in str(f.get("tipo", "")).lower()
+            or str(f.get("de", "") or "").strip().casefold() not in _empty_errata_vals
+        )
+    ]
     erratas_rows_html = ""
     for f in erratas_findings:
         fid = f.get("id", "ACH-000")
-        de_txt = f.get("de", "—")
-        para_txt = f.get("para", "—")
+        safe_fid = html.escape(str(fid), quote=True)
+        esc_fid = html.escape(str(fid))
+        esc_loc = html.escape(str(f.get('loc') or '—'))
+        esc_de = html.escape(str(f.get("de") or "—"))
+        esc_para = html.escape(str(f.get("para") or "—"))
+        esc_prop = html.escape(str(f.get('proprietario') or '—'))
         erratas_rows_html += f"""
         <tr>
           <td>
-            <a href="#card-{fid}" class="ssot-link" title="Clique para ver a Ficha 360° de origem">
-              <i class="fa-solid fa-arrow-right-to-bracket"></i> <strong>{fid}</strong>
+            <a href="#card-{safe_fid}" class="ssot-link" title="Clique para ver a Ficha 360° de origem">
+              <i class="fa-solid fa-arrow-right-to-bracket"></i> <strong>{esc_fid}</strong>
             </a>
           </td>
-          <td>{f.get('loc','—')}</td>
-          <td><span class="de-content" style="display:inline-block; margin:0;">"{de_txt}"</span></td>
-          <td><span class="para-content" id="err-para-{fid}" style="display:inline-block; margin:0;">"{para_txt}"</span></td>
-          <td>{f.get('proprietario','—')}</td>
+          <td>{esc_loc}</td>
+          <td><span class="de-content" style="display:inline-block; margin:0;">"{esc_de}"</span></td>
+          <td><span class="para-content" id="err-para-{safe_fid}" style="display:inline-block; margin:0;">"{esc_para}"</span></td>
+          <td>{esc_prop}</td>
           <td>
-            <button class="btn-copy" onclick="copySnippet('err-para-{fid}', this)"><i class="fa-solid fa-copy"></i> Copiar</button>
+            <button class="btn-copy" onclick="copySnippet('err-para-{safe_fid}', this)"><i class="fa-solid fa-copy"></i> Copiar</button>
           </td>
         </tr>"""
 
@@ -960,7 +1178,7 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
 
         prio = f.get("prioridade", "P2")
         tipo = f.get("tipo", "Técnico")
-        cat = f.get("categoria", "Geral")
+        cat = f.get("categoria") or f.get("cat") or "Geral"
         adjudication_status = _adjudication_status(f)
         adjudication_label = ADJUDICATION_LABELS[adjudication_status]
         adjudication_class = "confirmado" if adjudication_status == "confirmado" else (
@@ -971,9 +1189,10 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
             f'<div class="ssot-intro-note"><strong>Adjudicação:</strong> {html.escape(adjudication_label)}'
             + (f" — {adjudication_rationale}" if adjudication_rationale else "") + "</div>"
         )
-        is_direct = f.get("is_direct", False) or "→" in tipo or "grafia" in tipo.lower() or "sequência" in tipo.lower()
-        de_txt = f.get("de", "")
-        para_txt = f.get("para", "")
+        is_direct = f.get("is_direct", False) or "→" in str(tipo) or "grafia" in str(tipo).lower() or "sequência" in str(tipo).lower()
+        de_txt = str(f.get("de", "") or "")
+        para_txt = str(f.get("para", "") or "")
+        safe_fid = html.escape(str(fid), quote=True)
 
         solucao_box = ""
         if is_direct and (de_txt or para_txt):
@@ -981,19 +1200,19 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
             <div class="de-para-box">
               <div class="de-col">
                 <span class="de-label"><i class="fa-solid fa-file-lines"></i> Texto Atual (Baseline):</span>
-                <div class="de-content">"{de_txt}"</div>
+                <div class="de-content">"{html.escape(de_txt)}"</div>
               </div>
               <div class="para-col">
                 <span class="para-label"><i class="fa-solid fa-file-pen"></i> Redação Sugerida (Minuta Não Oficial):</span>
-                <div class="para-content" id="para-{fid}">"{para_txt}"</div>
-                <button class="btn-copy" onclick="copySnippet('para-{fid}', this)"><i class="fa-solid fa-copy"></i> Copiar Sugestão</button>
+                <div class="para-content" id="para-{safe_fid}">"{html.escape(para_txt)}"</div>
+                <button class="btn-copy" onclick="copySnippet('para-{safe_fid}', this)"><i class="fa-solid fa-copy"></i> Copiar Sugestão</button>
               </div>
             </div>"""
         elif f.get("solucao"):
             solucao_box = f"""
             <div class="solucao-box">
               <span class="solucao-label"><i class="fa-solid fa-list-check"></i> Plano de Solução Recomendado:</span>
-              <div class="solucao-content">{f['solucao']}</div>
+              <div class="solucao-content">{html.escape(str(f['solucao']))}</div>
             </div>"""
 
         visual_evidence_html = ""
@@ -1035,6 +1254,43 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
               {confronto_html}
             </div>"""
 
+        ev_raw = str(f.get("evidencia") or f.get("evidencia_nivel") or "E1").strip()
+        ev_match = re.match(r"^(E[123])\b", ev_raw, re.I)
+        ev_short = ev_match.group(1).upper() if ev_match else html.escape(ev_raw.split()[0] if ev_raw else "E1")
+
+        evidence_sources_html = []
+        for source in f.get("evidence_sources", []):
+            if not isinstance(source, dict):
+                continue
+            source_path = html.escape(str(source.get("document_path", "")))
+            source_location = html.escape(str(source.get("location", "Localização a confirmar")))
+            source_quote = html.escape(str(source.get("quote", "")))
+            source_hash = html.escape(str(source.get("sha256", "")))
+            evidence_sources_html.append(
+                f"<li><strong>{source_path}</strong> · {source_location}<blockquote>“{source_quote}”</blockquote>"
+                + (f"<small>SHA-256: <code>{source_hash}</code></small>" if source_hash else "") + "</li>"
+            )
+        citacao_raw = str(f.get("citacao") or "").strip()
+        if not evidence_sources_html and citacao_raw:
+            cit_doc = html.escape(str(f.get("doc_origem") or "Documento da baseline"))
+            cit_loc = html.escape(str(f.get("loc") or "Localização não informada"))
+            evidence_sources_html.append(
+                f"<li><strong>{cit_doc}</strong> · {cit_loc}<blockquote>“{html.escape(citacao_raw)}”</blockquote></li>"
+            )
+
+        reference_links = []
+        for reference in f.get("referencias", []):
+            if not isinstance(reference, dict):
+                continue
+            ref_title = html.escape(str(reference.get("titulo", "Referência técnica")))
+            ref_url_raw = str(reference.get("url", ""))
+            ref_url = html.escape(ref_url_raw, quote=True)
+            ref_note = html.escape(str(reference.get("nota", "")))
+            if ref_url_raw.startswith(("https://", "http://")):
+                reference_links.append(f'<li><a href="{ref_url}" target="_blank" rel="noopener">{ref_title}</a> {ref_note}</li>')
+            else:
+                reference_links.append(f"<li>{ref_title} {ref_note}</li>")
+
         semantic_skill = str(f.get("semantic_skill", ""))
         semantic_badge_html = ""
         semantic_evidence_html = ""
@@ -1044,42 +1300,28 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
                 'background:#eef2ff;color:#4338ca;font-size:.75rem;font-weight:700;">Revisão semântica · '
                 f"{html.escape(semantic_skill)}</span>"
             )
-            semantic_sources = []
-            for source in f.get("evidence_sources", []):
-                if not isinstance(source, dict):
-                    continue
-                source_path = html.escape(str(source.get("document_path", "")))
-                source_location = html.escape(str(source.get("location", "Localização a confirmar")))
-                source_quote = html.escape(str(source.get("quote", "")))
-                source_hash = html.escape(str(source.get("sha256", "")))
-                semantic_sources.append(
-                    f"<li><strong>{source_path}</strong> · {source_location}<blockquote>“{source_quote}”</blockquote>"
-                    + (f"<small>SHA-256: <code>{source_hash}</code></small>" if source_hash else "") + "</li>"
-                )
-            reference_links = []
-            for reference in f.get("referencias", []):
-                if not isinstance(reference, dict):
-                    continue
-                ref_title = html.escape(str(reference.get("titulo", "Referência técnica")))
-                ref_url_raw = str(reference.get("url", ""))
-                ref_url = html.escape(ref_url_raw, quote=True)
-                ref_note = html.escape(str(reference.get("nota", "")))
-                if ref_url_raw.startswith(("https://", "http://")):
-                    reference_links.append(f'<li><a href="{ref_url}" target="_blank" rel="noopener">{ref_title}</a> {ref_note}</li>')
-                else:
-                    reference_links.append(f"<li>{ref_title} {ref_note}</li>")
             semantic_evidence_html = (
                 '<div class="semantic-evidence" style="margin:14px 0;padding:12px 14px;border-left:3px solid #6366f1;'
                 'background:#f8faff;border-radius:6px;">'
                 '<strong>Rastreabilidade semântica:</strong> '
-                f"{html.escape(semantic_skill)} · {html.escape(str(f.get('evidencia', 'E1')))}"
-                + (f"<ul>{''.join(semantic_sources)}</ul>" if semantic_sources else "")
+                f"{html.escape(semantic_skill)} · {html.escape(ev_raw or 'E1')}"
+                + (f"<ul>{''.join(evidence_sources_html)}</ul>" if evidence_sources_html else "")
                 + (f"<strong>Referências corroborativas</strong><ul>{''.join(reference_links)}</ul>" if reference_links else "")
+                + "</div>"
+            )
+        elif evidence_sources_html or reference_links:
+            semantic_evidence_html = (
+                '<div class="semantic-evidence" style="margin:14px 0;padding:12px 14px;border-left:3px solid #6366f1;'
+                'background:#f8faff;border-radius:6px;">'
+                '<strong>Evidência Documental (Baseline):</strong> '
+                f"{html.escape(ev_raw or 'E1')}"
+                + (f"<ul>{''.join(evidence_sources_html)}</ul>" if evidence_sources_html else "")
+                + (f"<strong>Referências Normativas</strong><ul>{''.join(reference_links)}</ul>" if reference_links else "")
                 + "</div>"
             )
 
         safe_fid = html.escape(str(fid), quote=True)
-        safe_doc = html.escape(str(f.get('doc_origem', '')), quote=True)
+        safe_doc = html.escape(str(f.get('doc_origem', '') or ''), quote=True)
         safe_crit = html.escape(str(crit), quote=True)
         safe_prio = html.escape(str(prio), quote=True)
         safe_tipo = html.escape(str(tipo), quote=True)
@@ -1088,6 +1330,18 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
             f"{fid} {f.get('title', '')} {f.get('doc_origem', '')} {f.get('loc', '')} {f.get('fato', '')} {cat}",
             quote=True,
         )
+
+        esc_fid = html.escape(str(fid))
+        esc_crit = html.escape(str(crit))
+        esc_prio = html.escape(str(prio))
+        esc_tipo = html.escape(str(tipo))
+        esc_cat = html.escape(str(cat))
+        esc_title = html.escape(str(f.get('title', '') or ''))
+        esc_doc = html.escape(str(f.get('doc_origem') or '—'))
+        esc_loc = html.escape(str(f.get('loc') or '—'))
+        esc_fato = html.escape(str(f.get('fato', '') or ''))
+        esc_impacto = html.escape(str(f.get('impacto', '') or ''))
+        esc_prop = html.escape(str(f.get('proprietario') or '—'))
 
         findings_cards_html += f"""
         <div class="finding-card {c_class}"
@@ -1102,22 +1356,23 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
              data-search="{safe_search}">
           <div class="card-top">
             <div class="top-tags">
-              <span class="badge-id">{fid}</span>
-              <span class="badge-crit {c_class}">{crit}</span>
-              <span class="badge-prio">{prio}</span>
-              <span class="badge-tipo">{tipo}</span>
-              <span class="badge-adjudication {adjudication_class}">{adjudication_label}</span>
+              <span class="badge-id">{esc_fid}</span>
+              <span class="badge-crit {c_class}">{esc_crit}</span>
+              <span class="badge-prio">{esc_prio}</span>
+              <span class="badge-prio" title="Grau de Evidência">{ev_short}</span>
+              <span class="badge-tipo">{esc_tipo}</span>
+              <span class="badge-adjudication {adjudication_class}">{html.escape(str(adjudication_label))}</span>
               {semantic_badge_html}
             </div>
             <a href="#matriz-master" class="btn-back-ssot" title="Voltar para a Matriz SSOT"><i class="fa-solid fa-table-list"></i> Ver na Matriz SSOT</a>
           </div>
 
-          <h3 class="finding-title">{f['title']}</h3>
+          <h3 class="finding-title">{esc_title}</h3>
 
           <div class="finding-meta-row">
-            <span><i class="fa-solid fa-file-lines"></i> <strong>Doc:</strong> {f.get('doc_origem','—')}</span>
-            <span><i class="fa-solid fa-location-dot"></i> <strong>Local:</strong> {f.get('loc','—')}</span>
-            <span><i class="fa-solid fa-tag"></i> <strong>Categoria:</strong> {cat}</span>
+            <span><i class="fa-solid fa-file-lines"></i> <strong>Doc:</strong> {esc_doc}</span>
+            <span><i class="fa-solid fa-location-dot"></i> <strong>Local:</strong> {esc_loc}</span>
+            <span><i class="fa-solid fa-tag"></i> <strong>Categoria:</strong> {esc_cat}</span>
           </div>
 
           {adjudication_detail_html}
@@ -1125,11 +1380,11 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
           <div class="finding-body-grid">
             <div class="fato-box">
               <span class="box-title"><i class="fa-solid fa-eye"></i> Fato Observado (Baseline)</span>
-              <p>{f.get('fato','')}</p>
+              <p>{esc_fato}</p>
             </div>
             <div class="impacto-box">
               <span class="box-title"><i class="fa-solid fa-shield-cat"></i> Impacto Potencial</span>
-              <p>{f.get('impacto','')}</p>
+              <p>{esc_impacto}</p>
             </div>
           </div>
 
@@ -1139,7 +1394,7 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
           {semantic_evidence_html}
 
           <div class="card-bottom">
-            <span><i class="fa-solid fa-user-gear"></i> <strong>Proprietário Sugerido:</strong> {f.get('proprietario','—')}</span>
+            <span><i class="fa-solid fa-user-gear"></i> <strong>Proprietário Sugerido:</strong> {esc_prop}</span>
           </div>
         </div>"""
 
@@ -1617,15 +1872,15 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
 
             <!-- Hero Header Card -->
             <section class="hero-card">
-                <span class="hero-tag"><i class="fa-solid fa-folder-open"></i> Lote Analisado: {lote_name}</span>
+                <span class="hero-tag"><i class="fa-solid fa-folder-open"></i> Lote Analisado: {html.escape(str(lote_name))}</span>
                 <h1 class="hero-title">Relatório Consolidado de Revisão Técnica Independente</h1>
                 <div class="hero-meta">
-                    <span><i class="fa-solid fa-clock"></i> Timestamp: <code>{timestamp}</code></span> &nbsp;|&nbsp;
-                    <span><i class="fa-solid fa-calendar"></i> Data de Emissão: {data_fmt}</span>
+                    <span><i class="fa-solid fa-clock"></i> Timestamp: <code>{html.escape(str(timestamp))}</code></span> &nbsp;|&nbsp;
+                    <span><i class="fa-solid fa-calendar"></i> Data de Emissão: {html.escape(str(data_fmt))}</span>
                 </div>
 
                 <div class="parecer-badge {parecer_class}">
-                    <i class="fa-solid {parecer_icon}"></i> Parecer Técnico: {parecer}
+                    <i class="fa-solid {parecer_icon}"></i> Parecer Técnico: {html.escape(str(parecer))}
                 </div>
 
                 <div class="metrics-grid">
@@ -1838,7 +2093,17 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
                 const matchCat = (catVal === 'ALL') || (cardCat === catVal);
                 const matchAdjudication = (adjudicationVal === 'ALL') || (cardAdjudication === adjudicationVal);
                 const matchCrit = (currentCritFilter === 'ALL') || (cardCrit === currentCritFilter);
-                const matchTipo = (currentTipoFilter === 'ALL') || (cardTipo.toLowerCase().includes(currentTipoFilter.toLowerCase()));
+                const tipoLower = cardTipo.toLowerCase();
+                const catLower = cardCat.toLowerCase();
+                const matchTipo = (currentTipoFilter === 'ALL')
+                    || tipoLower.includes(currentTipoFilter.toLowerCase())
+                    || catLower.includes(currentTipoFilter.toLowerCase())
+                    || (currentTipoFilter === 'Estrutur' && (
+                        tipoLower.includes('errata')
+                        || catLower.includes('redacional')
+                        || catLower.includes('rfc')
+                        || catLower.includes('29148')
+                    ));
 
                 if (matchSearch && matchDoc && matchCat && matchAdjudication && matchCrit && matchTipo) {{
                     card.style.display = 'block';

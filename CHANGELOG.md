@@ -4,6 +4,33 @@ Todas as alterações graduais, correções e melhorias arquiteturais implementa
 
 ---
 
+## [1.4.1] - 2026-11-17
+### Corrigido
+- **Pipeline e Servidor MCP (Fase 1):**
+  - Preservação de citações literais (`LITERAL_QUOTE_KEYS`) em `sanitize_batch_isolation` (`mcp-server/audit_pipeline.py`) para evitar falhas na conferência exata de evidências.
+  - Aprimoramento da extração `.docx` (`extract_docx_text` / `_extract_docx_lines`) contemplando parágrafos, tabelas separadas por `|`, listas numeradas e cabeçalhos/rodapés, além de fallback de codificação `_read_text_with_fallback` (`utf-8-sig`, `utf-8`, `cp1252`, `latin-1`) em `mcp-server/server.py`.
+  - Localização precisa por `Linha N` (`_find_line_location` / `_line_snippet`), correção do cálculo de offset em `analyze_hld` (`mcp-server/advanced_specialized_controls.py`) e remoção de sobreposições de regras de domínio entre `server.py` e `specialized_controls.py`.
+  - Preenchimento estruturado de `evidence_sources` e hashes SHA-256 nos conflitos cruzados (`audit_pipeline.py`, `cross_document.py`, `tabular_visual_controls.py`) e aceitação de citações literais tanto em `located_text` quanto em `text` na validação `_validate_adjudication_evidence`.
+  - Refinamento de `detect_document_versions` (`mcp-server/audit_engine.py`) e garantia do estado fail-safe `PENDENTE DE ADJUDICAÇÃO` (com `iqd="—"`) em `generate_6_reports` quando houver achados pendentes.
+
+### Adicionado / Melhorado
+- **Relatórios HTML e Central Master (Fase 2):**
+  - Aplicação abrangente de `html.escape` em `mcp-server/html_compiler.py` e `mcp-server/server.py` (incluindo `resumo_snippet` convertido via `**...**` após escapamento).
+  - Expansão do Quadro de Reconciliação Técnica na Seção 1 (`_build_resumo_html`) com tabelas colapsáveis (`<details>`) para achados sanados, reincidentes e novos com âncoras `#card-...`.
+  - Inclusão da coluna **Achado Vinculado** nas perguntas formais `Q-XXX` (`_build_acoes_html`), unificação de chaves em **Lacunas & Riscos** (`_build_lacunas_html`) e exibição consistente de `Status` e `Observação` em **Checklists** (`_build_checklists_html`).
+  - Adição das tabelas de **Cobertura de Extração**, **Matriz de Escopos da Revisão Semântica** e **Memória de Cálculo do IQD** na Seção 8 (`_build_rastrea_html`).
+  - Inclusão da badge de grau de evidência e do bloco **Evidência Documental (Baseline)** (citações literais + referências normativas) nas Fichas 360°, exclusão de falsos positivos/duplicados/fora de escopo e placeholders vazios no Caderno de Erratas De → Para, cálculo de `kpis["estruturais"]` e alinhamento do filtro JavaScript `applyFilters()`.
+  - Deduplicação por lote (`latest_runs` / `total_unique_lotes`) no cálculo de `total_criticos`, `total_lacunas` e `avg_iqd_str` em `tool_build_master_index` (`mcp-server/server.py`).
+
+### Documentação
+- **Alinhamento Normativo, Checklists e Catálogo MCP (Fase 3):**
+  - Correção da numeração sequencial e remoção de item duplicado do Passo 0 em `framework/revisao.md`, além do alinhamento da nomenclatura de imagens, tradução de `E3 — confirmado` e formalização da fórmula operacional do IQD na Seção 27.
+  - Remoção de blocos duplicados e referências Markdown legadas em `framework/templates/modelo_skill.md`.
+  - Remoção de linha duplicada com vocabulário PT-PT (`"gralhas"`) em `framework/checklists/editorial.md` e alinhamento de `framework/checklists/imagens.md` com `.agents/skills/analisar-diagramas/SKILL.md`.
+  - Atualização de `README.md` e `CHANGELOG.md` refletindo os módulos reais de `mcp-server/`, `Pillow` em `requirements.txt`, o fluxo canônico e as 20 ferramentas MCP expostas em `TOOLS_MANIFEST`.
+
+---
+
 ## [1.4.0] - 2026-11-09
 ### Adicionado
 - **Ferramenta MCP de Reconciliação de Versões (`reconcile_versions` / `tool_reconcile_versions`):**
@@ -42,7 +69,7 @@ Todas as alterações graduais, correções e melhorias arquiteturais implementa
 
 ### Documentação
 - **Padronização de Documentação, Normas, Checklists e Skills:**
-  - Atualização de `framework/revisao.md`, `.agents/AGENTS.md`, `README.md`, `framework/checklists/editorial.md`, `framework/templates/modelo_skill.md`, `framework/normas/README.md` e das skills em `.agents/skills/` para refletir as 22 ferramentas MCP, os 26 checklists, a hierarquia tripla e a arquitetura SSOT (`dados_analise.json` + `index.html`).
+  - Atualização de `framework/revisao.md`, `.agents/AGENTS.md`, `README.md`, `framework/checklists/editorial.md`, `framework/templates/modelo_skill.md`, `framework/normas/README.md` e das skills em `.agents/skills/` para refletir as 20 ferramentas MCP, os 26 checklists, a hierarquia tripla e a arquitetura SSOT (`dados_analise.json` + `index.html`).
 
 ---
 

@@ -9,6 +9,7 @@ Analisa lotes aninhados: subpastas de 1º nível em entrada/ = um lote completo.
 import os
 import sys
 import json
+import html
 import shutil
 import hashlib
 import zipfile
@@ -2919,14 +2920,14 @@ def tool_build_master_index() -> str:
             elif not resumo_snippet:
                 if "NÃO APTO" in parecer.upper():
                     if top_achados:
-                        resumo_snippet = f"Análise concluída com parecer <strong>NÃO APTO PARA DECISÃO</strong>. Lote bloqueado por {criticos} achado(s) crítico(s) e {altos} de alta severidade, destacando-se: {top_achados[0]['title']} ({top_achados[0]['id']})."
+                        resumo_snippet = f"Análise concluída com parecer **NÃO APTO PARA DECISÃO**. Lote bloqueado por {criticos} achado(s) crítico(s) e {altos} de alta severidade, destacando-se: {top_achados[0]['title']} ({top_achados[0]['id']})."
                     else:
-                        resumo_snippet = f"Análise concluída com parecer <strong>NÃO APTO PARA DECISÃO</strong> devido a inconsistências técnicas e lacunas de alto impacto no lote ({total_achados} achados)."
+                        resumo_snippet = f"Análise concluída com parecer **NÃO APTO PARA DECISÃO** devido a inconsistências técnicas e lacunas de alto impacto no lote ({total_achados} achados)."
                 else:
                     if top_achados:
-                        resumo_snippet = f"Análise concluída com parecer <strong>APTO COM RESSALVAS</strong> (IQD {iqd}). Requer atenção técnica para: {top_achados[0]['title']} ({top_achados[0]['id']})."
+                        resumo_snippet = f"Análise concluída com parecer **APTO COM RESSALVAS** (IQD {iqd}). Requer atenção técnica para: {top_achados[0]['title']} ({top_achados[0]['id']})."
                     else:
-                        resumo_snippet = f"Análise concluída com parecer <strong>APTO COM RESSALVAS</strong> (IQD {iqd}). Documentação consistente, registrando apenas {total_achados} apontamento(s) de menor gravidade."
+                        resumo_snippet = f"Análise concluída com parecer **APTO COM RESSALVAS** (IQD {iqd}). Documentação consistente, registrando apenas {total_achados} apontamento(s) de menor gravidade."
             resumo_snippet = clean_unicode_text(resumo_snippet)
 
         else:
@@ -2999,9 +3000,18 @@ def tool_build_master_index() -> str:
             }
         })
 
+    latest_runs = []
+    seen_lotes = set()
+    for r in runs:
+        lote_key = r.get("lote_parent") or r.get("lote_name") or r["timestamp"]
+        if lote_key not in seen_lotes:
+            seen_lotes.add(lote_key)
+            latest_runs.append(r)
+
     manifest = {
         "updated_at": datetime.datetime.now().isoformat(),
         "total_analyses": len(runs),
+        "total_unique_lotes": len(latest_runs),
         "analyses": runs
     }
 
@@ -3019,12 +3029,12 @@ def tool_build_master_index() -> str:
         runs_nao_apto = sum(1 for r in runs if "NÃO APTO" in r["parecer"].upper())
         runs_pendentes = sum(1 for r in runs if "PENDENTE DE ADJUDICAÇÃO" in r["parecer"].upper())
         runs_ressalvas = sum(1 for r in runs if "RESSALVA" in r["parecer"].upper())
-        total_criticos = sum(r["metrics"]["criticos"] for r in runs)
-        total_lacunas = sum(r["metrics"]["lacunas"] for r in runs)
+        total_criticos = sum(r["metrics"]["criticos"] for r in latest_runs)
+        total_lacunas = sum(r["metrics"]["lacunas"] for r in latest_runs)
         
-        # Média numérica do IQD
+        # Média numérica do IQD considerando a rodada mais recente de cada lote
         iqd_nums = []
-        for r in runs:
+        for r in latest_runs:
             v_str = r["metrics"]["iqd"].replace('%', '').replace(',', '.').strip()
             try:
                 iqd_nums.append(float(v_str))
@@ -3034,11 +3044,11 @@ def tool_build_master_index() -> str:
 
         for r in runs:
             m = r["metrics"]
-            files_html = ", ".join([f'<code>{fn}</code>' for fn in r["files"][:3]]) or "<code>Baseline</code>"
+            files_html = ", ".join([f'<code>{html.escape(str(fn))}</code>' for fn in r["files"][:3]]) or "<code>Baseline</code>"
             if len(r["files"]) > 3:
                 files_html += f" (+{len(r['files'])-3} arquivos)"
 
-            skills_html = "".join([f'<span class="skill-badge"><i class="fa-solid fa-wand-magic-sparkles"></i> {sk}</span>' for sk in r["skills"]])
+            skills_html = "".join([f'<span class="skill-badge"><i class="fa-solid fa-wand-magic-sparkles"></i> {html.escape(str(sk))}</span>' for sk in r["skills"]])
 
             parecer_upper = r["parecer"].upper()
             if "NÃO APTO" in parecer_upper:
@@ -3061,8 +3071,8 @@ def tool_build_master_index() -> str:
                 for ta in r["top_achados"]:
                     items_html += f"""
                     <li class="top-achado-item">
-                      <span class="top-achado-id">{ta['id']}</span>
-                      <div><strong>{ta['title']}</strong> <span style="font-size:0.75rem; color:#b91c1c;">({ta['doc']})</span></div>
+                      <span class="top-achado-id">{html.escape(str(ta['id']))}</span>
+                      <div><strong>{html.escape(str(ta['title']))}</strong> <span style="font-size:0.75rem; color:#b91c1c;">({html.escape(str(ta['doc']))})</span></div>
                     </li>"""
                 top_achados_html = f"""
                 <div class="top-achados-box">
@@ -3073,18 +3083,29 @@ def tool_build_master_index() -> str:
                 </div>"""
 
             search_str = f"{r['timestamp']} {r['title']} {r['lote_name']} {r['date_formatted']} {' '.join(r['skills'])} {r['resumo_snippet']} {card_status_cls}".lower()
+            safe_search_str = html.escape(search_str, quote=True)
 
-            resumo_html = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', r['resumo_snippet'])
+            escaped_resumo = html.escape(str(r['resumo_snippet']))
+            resumo_html = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', escaped_resumo)
             resumo_html = re.sub(r'`(.*?)`', r'<code>\1</code>', resumo_html).replace('**', '')
 
+            esc_date = html.escape(str(r['date_formatted']))
+            esc_title = html.escape(str(r['title']))
+            esc_version = html.escape(str(r.get('version', 'v1.0')))
+            esc_parecer = html.escape(str(r['parecer']))
+            esc_ts = html.escape(str(r['timestamp']))
+            esc_lote = html.escape(str(r['lote_name']))
+            esc_iqd = html.escape(str(m['iqd']))
+            safe_href = html.escape(str(r['index_html']), quote=True)
+
             cards_html += f"""
-            <div class="run-card {card_status_cls}" data-search="{search_str}" data-parecer="{card_status_cls}">
+            <div class="run-card {card_status_cls}" data-search="{safe_search_str}" data-parecer="{card_status_cls}">
                 <div class="run-card-header">
                     <div>
-                        <div class="run-date"><i class="fa-solid fa-calendar-day"></i> {r['date_formatted']}</div>
-                        <h3 class="run-title">{r['title']} <span class="skill-badge" style="background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd; font-size:0.75rem;"><i class="fa-solid fa-code-branch"></i> {r.get('version', 'v1.0')}</span>{' <span class="skill-badge" style="background:#fef3c7; color:#92400e; border:1px solid #fde68a; font-size:0.75rem;"><i class="fa-solid fa-clock-rotate-left"></i> Revisão Adjudicada</span>' if r.get('is_revision') else ''}</h3>
+                        <div class="run-date"><i class="fa-solid fa-calendar-day"></i> {esc_date}</div>
+                        <h3 class="run-title">{esc_title} <span class="skill-badge" style="background:#e0f2fe; color:#0369a1; border:1px solid #bae6fd; font-size:0.75rem;"><i class="fa-solid fa-code-branch"></i> {esc_version}</span>{' <span class="skill-badge" style="background:#fef3c7; color:#92400e; border:1px solid #fde68a; font-size:0.75rem;"><i class="fa-solid fa-clock-rotate-left"></i> Revisão Adjudicada</span>' if r.get('is_revision') else ''}</h3>
                     </div>
-                    <span class="badge {parecer_cls}">{r['parecer']}</span>
+                    <span class="badge {parecer_cls}">{esc_parecer}</span>
                 </div>
                 <div class="run-body">
                     <div class="run-files">
@@ -3116,20 +3137,20 @@ def tool_build_master_index() -> str:
                         <div class="metric-sub"><span class="lbl">Achados</span><span class="val">{m['total_achados']}</span></div>
                         <div class="metric-sub"><span class="lbl">Críticos</span><span class="val crit">{m['criticos']}</span></div>
                         <div class="metric-sub"><span class="lbl">Lacunas</span><span class="val lac">{m['lacunas']}</span></div>
-                        <div class="metric-sub"><span class="lbl">IQD</span><span class="val iqd">{m['iqd']}</span></div>
+                        <div class="metric-sub"><span class="lbl">IQD</span><span class="val iqd">{esc_iqd}</span></div>
                     </div>
                 </div>
                 <div class="run-card-footer">
-                    <a href="{r['index_html']}" class="btn-open-report"><i class="fa-solid fa-chart-column"></i> Abrir Relatório Consolidado HTML</a>
+                    <a href="{safe_href}" class="btn-open-report"><i class="fa-solid fa-chart-column"></i> Abrir Relatório Consolidado HTML</a>
                 </div>
             </div>"""
 
             rows_html += f"""
-            <tr data-search="{search_str}" data-parecer="{card_status_cls}">
-                <td><code>{r['timestamp']}</code><br><span class="run-date">{r['date_formatted']}</span></td>
-                <td><strong>{r['lote_name']}</strong><br><span style="font-size:0.75rem; color:var(--text-muted);">{files_html}</span></td>
-                <td><span class="badge {parecer_cls}">{r['parecer']}</span></td>
-                <td><strong style="color:var(--success); font-size:1.05rem;">{m['iqd']}</strong></td>
+            <tr data-search="{safe_search_str}" data-parecer="{card_status_cls}">
+                <td><code>{esc_ts}</code><br><span class="run-date">{esc_date}</span></td>
+                <td><strong>{esc_lote}</strong><br><span style="font-size:0.75rem; color:var(--text-muted);">{files_html}</span></td>
+                <td><span class="badge {parecer_cls}">{esc_parecer}</span></td>
+                <td><strong style="color:var(--success); font-size:1.05rem;">{esc_iqd}</strong></td>
                 <td>
                   <div style="font-size:0.78rem;">
                     <strong>Total:</strong> {m['total_achados']}<br>
@@ -3138,7 +3159,7 @@ def tool_build_master_index() -> str:
                   </div>
                 </td>
                 <td><div style="max-width:400px; font-size:0.82rem; color:var(--text-main);">{resumo_html}</div></td>
-                <td><a href="{r['index_html']}" class="btn-open-report" style="padding:6px 10px; font-size:0.75rem;"><i class="fa-solid fa-arrow-up-right-from-square"></i> Abrir</a></td>
+                <td><a href="{safe_href}" class="btn-open-report" style="padding:6px 10px; font-size:0.75rem;"><i class="fa-solid fa-arrow-up-right-from-square"></i> Abrir</a></td>
             </tr>"""
 
         master = template.replace('__TOTAL_RUNS__', str(len(runs)))

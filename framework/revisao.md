@@ -36,15 +36,14 @@ O revisor técnico mantém rastreabilidade e independência. O proprietário for
 ## 6. Fluxo de Revisão Técnica (RTI)
 
 1. Registrar demanda, propósito, escopo, exclusões e classificação da informação.
-2. Inicializar o `TIMESTAMP` no formato `YYYYMMDD_HHMMSS` e criar a estrutura em `analise/<timestamp>/`.
-3. **Triagem Adaptativa e Pausa Interativa de Escopo (Passo 0):** Executar a ferramenta `profile_baseline` sobre `entrada/`, mapeando os domínios técnicos presentes, definindo a matriz de checklists ativos e inaplicáveis (com justificativa auditável), recomendando/omitindo skills e sugerindo novas skills especializadas (ex: `analisar-lgpd`, `analisar-finops`). **A IA DEVE APRESENTAR O PLANO DE TRIAGEM AO USUÁRIO E PAUSAR A EXECUÇÃO AGUARDANDO A CONFIRMAÇÃO DO USUÁRIO ANTES DE CONTINUAR.**
+2. Inicializar o `TIMESTAMP` no formato `YYYYMMDD_HHMMSS` e criar a estrutura canônica em `analise/<lote>/<version>/<timestamp>/` (ou `analise/<timestamp>/`).
 3. **Triagem Adaptativa de Escopo (Passo 0):** Executar a ferramenta `profile_baseline` sobre `entrada/<lote>/`, mapeando os domínios técnicos presentes, definindo a matriz de checklists ativos e inaplicáveis (com justificativa auditável), ativando 100% das skills recomendadas em `decisoes.yaml` e auto-gerando rascunhos para novas skills especializadas detectadas. Por padrão, o pipeline prossegue de forma autônoma sem pausas; quando o usuário solicitar validação prévia do plano de triagem, aguardar confirmação antes de prosseguir.
-4. Congelar baseline: inventário, versão, data, origem, hash (SHA-256 de textos e imagens em `entrada/`) e relação entre documentos. Imagens avulsas ou extraídas devem seguir a nomenclatura padronizada `fig{NN}_{doc}_{secao/pag}_{descricao_curta}.png` e ser inventariadas.
+4. Congelar baseline: inventário, versão, data, origem, hash (SHA-256 de textos e imagens em `entrada/`) e relação entre documentos. Para imagens avulsas de origem, recomenda-se a nomenclatura padronizada `fig{NN}_{doc}_{secao/pag}_{descricao_curta}.png`; ativos extraídos ou renderizados recebem identificadores técnicos no inventário visual e hash SHA-256 (a ausência desse padrão de nome de arquivo em imagens embutidas não constitui achado por si só).
 5. Criar mapa documental e matriz de rastreabilidade de objetivos, requisitos e evidências.
 6. Executar triagem editorial, estrutural, técnica e normativa conforme os checklists mantidos ativos.
 7. Registrar evidências e fichas 360° unificadas organizadas pela sequência natural de leitura das seções dos documentos de origem.
-8. Emitir o **Relatório Consolidado Exaustivo HTML (`index.html`)** e a base estruturada `dados_analise.json` em `analise/<timestamp>/relatorios/`.
-9. Finalizar o processamento: mover os arquivos de baseline analisados da pasta `entrada/` para `analise/<timestamp>/entrada/` e atualizar a Central Master (`analise/index.html` e `analise/manifest.json`).
+8. Emitir o **Relatório Consolidado Exaustivo HTML (`index.html`)** e a base estruturada `dados_analise.json` em `analise/<lote>/<version>/<timestamp>/relatorios/`.
+9. Finalizar o processamento: mover os arquivos de baseline analisados da pasta `entrada/` para `analise/<lote>/<version>/<timestamp>/entrada/` e atualizar a Central Master (`analise/index.html` e `analise/manifest.json`).
 10. Receber resposta do proprietário sem alterar o registro original; reauditar somente a nova baseline.
 
 ## 7. Princípios
@@ -62,7 +61,7 @@ Editorial & Estrutura Documental (inclui sequência numérica e referências cru
 
 ## 10. Grau de evidência
 
-**E0 — não verificado:** alegação sem fonte, não pode gerar conclusão. **E1 — indicação:** evidência parcial ou contexto incompleto. **E2 — corroborado:** trecho recuperável ou imagem legível conferida em fonte baseline. **E3 — confirmed:** corroborado por fontes independentes, teste/reprodução ou confronto direto entre diagrama e texto baseline. Achados críticos exigem E2; alegações de conformidade ou descumprimento normativo exigem E3 ou devem ser expressas como necessidade de validação.
+**E0 — não verificado:** alegação sem fonte, não pode gerar conclusão. **E1 — indicação:** evidência parcial ou contexto incompleto. **E2 — corroborado:** trecho recuperável ou imagem legível conferida em fonte baseline. **E3 — confirmado:** corroborado por fontes independentes, teste/reprodução ou confronto direto entre diagrama e texto baseline (ou entre múltiplos trechos literais da baseline). Achados críticos exigem E2; alegações de conformidade ou descumprimento normativo exigem E3 ou devem ser expressas como necessidade de validação.
 
 ## 11. Criticidade
 
@@ -163,7 +162,7 @@ Indicadores mostram tendência, não veredito isolado: cobertura verificável; d
 
 ## 27. Índice de qualidade documental
 
-O IQD é opcional e local: `IQD = 100 × (itens conformes verificáveis / itens aplicáveis verificados)`. Publicar cobertura, pesos aprovados, itens não verificados e limitações. O IQD não pode compensar achado crítico nem ser calculado sobre requisito inventariado de modo incompleto.
+O IQD avalia a qualidade documental sobre os achados confirmados após adjudicação. Conceitualmente reflete a proporção de verificações conformes frente aos itens aplicáveis verificados; operacionalmente, o motor calcula `IQD = max(0, 100 × (1 − Impacto Ponderado / (Denominador × 4)))`, aplicando os pesos `Crítica = 4`, `Alta = 3`, `Média = 2`, `Baixa = 1` e `Informativa = 0` sobre achados confirmados. Enquanto houver achados pendentes de adjudicação, o IQD permanece bloqueado (`"—"`). Publicar cobertura, pesos, denominador, itens não verificados e limitações. O IQD não compensa achado crítico no parecer final.
 
 ## 28. Índice de maturidade documental
 
@@ -189,7 +188,6 @@ Planejar antes de revisar; realizar leitura cruzada; usar identificadores estáv
 
 Registrar apenas após encerramento, sem reescrever o histórico. Cada lição referencia evidência, contexto, decisão, benefício esperado, responsável e revisão futura.
 
-## 35. Aviso de Responsabilidade e Colaboração
 ## 34. Aviso de Responsabilidade e Colaboração
 
 Este conteúdo foi elaborado para apoiar a análise e a tomada de decisão, mas não representa uma verdade absoluta. Diferentes contextos, interpretações, restrições e necessidades podem levar a conclusões distintas, todas potencialmente válidas.
@@ -198,7 +196,6 @@ A leitura deste material pressupõe análise crítica, entendimento e concordân
 
 A qualidade deste conteúdo é uma responsabilidade compartilhada. Identificar inconsistências, sugerir melhorias, corrigir informações ou complementar análises faz parte de um processo colaborativo e contínuo. A responsabilidade pelos resultados não deve ser atribuída a uma única pessoa, mas a todos que participam da sua leitura, revisão e evolução.
 
-## Autoauditoria do framework
 ## 35. Autoauditoria do framework
 
 Esta versão separa criticidade de prioridade e de tipo; separa análise de consultoria; proíbe oficialidade e invenção; condiciona métricas a denominadores; e exige evidência e baseline. A validação de aplicabilidade normativa, pesos de índices e critérios específicos permanece deliberadamente dependente do contexto, para não criar obrigações fictícias.
