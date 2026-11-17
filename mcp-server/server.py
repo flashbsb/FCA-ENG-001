@@ -32,6 +32,7 @@ import tabular_visual_controls
 import advanced_specialized_controls
 import visual_pipeline
 import semantic_pipeline
+import schemas
 from xlsx_fallback import extract_xlsx_data as extract_xlsx_data_fallback
 
 
@@ -1546,7 +1547,7 @@ def tool_run_full_audit(lote_path: str = None) -> str:
             'esclarecimentos': esclarecimentos_list,
             'checklists_status': audit_pipeline.build_checklist_status(p.get('active_checklists', []), all_findings, coverage),
             'skills_ativas': skills_ativas,
-            'iqd_denominador': max(len(baseline_files) * 15, 30),
+            'iqd_denominador': audit_engine.compute_checklist_denominator(root, p.get('active_checklists', []), len(baseline_files)),
             'schema_version': audit_pipeline.SCHEMA_VERSION,
             'cobertura_extracao': coverage,
             'visual_inventory': visual_inventory,
@@ -2459,35 +2460,40 @@ def tool_validate_analise_contract(timestamp: str = None) -> str:
                 results["missing"].append(rfile)
                 results["files"].append({"file": rfile, "status": "missing"})
 
-    # Validação de cobertura de skills em dados_analise.json
+    # Validação de schema SSOT e cobertura de skills em dados_analise.json
     data_json_path = os.path.join(rel_dir, "dados_analise.json")
     decisoes_yaml_path = os.path.join(root, "entrada", "decisoes.yaml")
 
-    if os.path.exists(data_json_path) and os.path.exists(decisoes_yaml_path):
+    if os.path.exists(data_json_path):
         try:
             with open(data_json_path, 'r', encoding='utf-8') as f:
                 analise_data = json.load(f)
-            skills_ativas = set(analise_data.get("skills_ativas", []))
+            for schema_msg in schemas.validate_dados_analise_schema(analise_data):
+                if schema_msg not in results["validation_warnings"]:
+                    results["validation_warnings"].append(schema_msg)
 
-            # Tentar achar o lote correspondente no decisoes.yaml
-            clean_ts = ts.split('/')[-1]
-            lote_id = clean_ts.split('_', 2)[2] if len(clean_ts.split('_', 2)) > 2 else clean_ts
-            with open(decisoes_yaml_path, 'r', encoding='utf-8') as f:
-                decisoes_content = f.read()
+            if os.path.exists(decisoes_yaml_path):
+                skills_ativas = set(analise_data.get("skills_ativas", []))
 
-            if lote_id:
-                lote_blocks = decisoes_content.split('  - id: ')
-                for block in lote_blocks:
-                    if block.startswith(f'"{lote_id}"') or block.startswith(f"'{lote_id}'") or block.startswith(lote_id):
-                        for line in block.splitlines():
-                            if 'skill:' in line:
-                                sk_name = line.split('skill:')[1].strip().strip('"').strip("'")
-                                if sk_name and sk_name not in skills_ativas:
-                                    msg = f"Skill recomendada '{sk_name}' em decisoes.yaml não foi incluída em 'skills_ativas' do lote {lote_id}."
-                                    if msg not in results["validation_warnings"]:
-                                        results["validation_warnings"].append(msg)
+                # Tentar achar o lote correspondente no decisoes.yaml
+                clean_ts = ts.split('/')[-1]
+                lote_id = clean_ts.split('_', 2)[2] if len(clean_ts.split('_', 2)) > 2 else clean_ts
+                with open(decisoes_yaml_path, 'r', encoding='utf-8') as f:
+                    decisoes_content = f.read()
+
+                if lote_id:
+                    lote_blocks = decisoes_content.split('  - id: ')
+                    for block in lote_blocks:
+                        if block.startswith(f'"{lote_id}"') or block.startswith(f"'{lote_id}'") or block.startswith(lote_id):
+                            for line in block.splitlines():
+                                if 'skill:' in line:
+                                    sk_name = line.split('skill:')[1].strip().strip('"').strip("'")
+                                    if sk_name and sk_name not in skills_ativas:
+                                        msg = f"Skill recomendada '{sk_name}' em decisoes.yaml não foi incluída em 'skills_ativas' do lote {lote_id}."
+                                        if msg not in results["validation_warnings"]:
+                                            results["validation_warnings"].append(msg)
         except Exception as e:
-            results["validation_warnings"].append(f"Aviso ao validar cobertura de skills: {str(e)}")
+            results["validation_warnings"].append(f"Aviso ao validar contrato/skills de dados_analise.json: {str(e)}")
 
     if results["missing"]:
         results["status"] = "incomplete"

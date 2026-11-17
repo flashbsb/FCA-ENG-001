@@ -14,6 +14,12 @@ Todas as alterações graduais, correções e melhorias arquiteturais implementa
   - Refinamento de `detect_document_versions` (`mcp-server/audit_engine.py`) e garantia do estado fail-safe `PENDENTE DE ADJUDICAÇÃO` (com `iqd="—"`) em `generate_6_reports` quando houver achados pendentes.
 
 ### Adicionado / Melhorado
+- **Contrato de Schema, Controles Tabulares e Relatórios Offline (Fase 4):**
+  - Criação de `mcp-server/schemas.py` com tipos `TypedDict`, sincronização de campos canônicos/legados (`ensure_canonical_finding_fields`) e validação estrutural (`validate_dados_analise_schema`) integrada a `tool_validate_analise_contract`.
+  - Refinamento do denominador dinâmico do IQD via contagem real de itens aplicáveis nos checklists ativos (`compute_checklist_denominator` em `mcp-server/audit_engine.py` integrada em `tool_run_full_audit`).
+  - Adição dos controles tabulares determinísticos `XLS-ERR-001` (`spreadsheet_formula_or_error_cells`) e `XLS-SUM-001` (`spreadsheet_total_sum_mismatches`) em `mcp-server/tabular_visual_controls.py` e mapeamento `plan` em `mcp-server/audit_pipeline.py`.
+  - Remoção das dependências CDN externas (`Google Fonts` / `Font Awesome`) em `mcp-server/html_compiler.py` e `framework/templates/master_index_template.html` com ícones CSS e pilha tipográfica offline.
+  - Expansão de `mcp-server/tests/test_adjudication.py` com testes cobrindo validação de schema, denominador por checklists, erros de fórmula e soma em planilhas, HTML offline/anti-XSS e autoauditoria estrutural dos normativos do framework.
 - **Relatórios HTML e Central Master (Fase 2):**
   - Aplicação abrangente de `html.escape` em `mcp-server/html_compiler.py` e `mcp-server/server.py` (incluindo `resumo_snippet` convertido via `**...**` após escapamento).
   - Expansão do Quadro de Reconciliação Técnica na Seção 1 (`_build_resumo_html`) com tabelas colapsáveis (`<details>`) para achados sanados, reincidentes e novos com âncoras `#card-...`.

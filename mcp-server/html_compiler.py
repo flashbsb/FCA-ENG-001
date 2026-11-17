@@ -1404,12 +1404,7 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Relatório RTI — {lote_name}</title>
-    <!-- Google Fonts & Font Awesome -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <title>Relatório RTI — {html.escape(str(lote_name))}</title>
 
     <style>
         :root {{
@@ -1438,7 +1433,7 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
         html {{ scroll-behavior: smooth; }}
 
         body {{
-            font-family: 'Inter', sans-serif;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
             background-color: var(--bg-body);
             color: var(--text-main);
             line-height: 1.65;
@@ -1446,10 +1441,52 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
         }}
 
         h1, h2, h3, h4, h5 {{
-            font-family: 'Outfit', sans-serif;
+            font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             color: var(--secondary);
             font-weight: 700;
         }}
+
+        /* Ícones offline (autossuficiente sem dependências CDN) */
+        .fa-solid {{
+            display: inline-block;
+            font-style: normal;
+            font-variant: normal;
+            text-rendering: auto;
+            line-height: 1;
+            vertical-align: middle;
+        }}
+        .fa-shield-halved::before {{ content: "🛡"; }}
+        .fa-house::before {{ content: "🏠"; }}
+        .fa-bars::before {{ content: "☰"; }}
+        .fa-print::before {{ content: "⎙"; }}
+        .fa-chart-pie::before {{ content: "◔"; }}
+        .fa-table-list::before {{ content: "▦"; }}
+        .fa-list-check::before {{ content: "☑"; }}
+        .fa-file-pen::before {{ content: "✎"; }}
+        .fa-clipboard-question::before {{ content: "❓"; }}
+        .fa-triangle-exclamation::before {{ content: "⚠"; }}
+        .fa-square-check::before {{ content: "✔"; }}
+        .fa-fingerprint::before {{ content: "❖"; }}
+        .fa-folder-open::before {{ content: "📁"; }}
+        .fa-clock::before {{ content: "⏱"; }}
+        .fa-calendar::before {{ content: "📅"; }}
+        .fa-circle-exclamation::before {{ content: "⚠"; }}
+        .fa-hourglass-half::before {{ content: "⏳"; }}
+        .fa-circle-check::before {{ content: "✔"; }}
+        .fa-magnifying-glass::before {{ content: "🔍"; }}
+        .fa-circle-info::before {{ content: "ℹ"; }}
+        .fa-circle-chevron-right::before {{ content: "›"; }}
+        .fa-arrow-right-to-bracket::before {{ content: "→"; }}
+        .fa-copy::before {{ content: "⧉"; }}
+        .fa-check::before {{ content: "✓"; }}
+        .fa-file-lines::before {{ content: "📄"; }}
+        .fa-diagram-project::before {{ content: "❖"; }}
+        .fa-location-dot::before {{ content: "📍"; }}
+        .fa-tag::before {{ content: "🏷"; }}
+        .fa-eye::before {{ content: "👁"; }}
+        .fa-shield-cat::before {{ content: "🛡"; }}
+        .fa-user-gear::before {{ content: "⚙"; }}
+        .fa-microchip::before {{ content: "⚙"; }}
 
         /* Navbar Fixa Superior */
         .top-navbar {{

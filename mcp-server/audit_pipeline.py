@@ -297,6 +297,7 @@ RULE_PREFIX_CHECKLIST_MAP = {
     "dc": ["datacenter.md", "arquitetura.md"],
     "int": ["integracoes.md", "arquitetura.md", "tm_forum.md"],
     "xls": ["planilha.md", "tabelas.md"],
+    "plan": ["planilha.md", "tabelas.md"],
     "xref-qtd": ["planilha.md", "tabelas.md"],
     "dia": ["diagramas.md", "imagens.md"],
     "vis": ["diagramas.md", "imagens.md"],

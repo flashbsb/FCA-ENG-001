@@ -266,6 +266,158 @@ class FindingAdjudicationTests(unittest.TestCase):
             self.assertIn("EDIT-008", ids)
             self.assertIn("EDIT-009", ids)
 
+    def test_schema_contract_validation_and_canonical_fields(self):
+        import schemas
+
+        legacy_finding = {
+            "id": "TST-001",
+            "titulo": "Título legado",
+            "documento": "spec.txt",
+            "localizacao": "Linha 3",
+            "cat": "Segurança",
+            "tipo": "Lacuna",
+            "evid": "E2",
+            "crit": "Alta",
+            "prio": "P1",
+            "evidencia_literal": "TLS obrigatório.",
+            "fato": "Falta detalhar versão mínima.",
+            "impacto": "Risco de uso de protocolo legado.",
+        }
+        canonical = schemas.ensure_canonical_finding_fields(legacy_finding)
+        self.assertEqual(canonical["title"], "Título legado")
+        self.assertEqual(canonical["doc_origem"], "spec.txt")
+        self.assertEqual(canonical["loc"], "Linha 3")
+        self.assertEqual(canonical["categoria"], "Segurança")
+        self.assertEqual(canonical["evidencia"], "E2")
+        self.assertEqual(canonical["criticidade"], "Alta")
+        self.assertEqual(canonical["prioridade"], "P1")
+        self.assertEqual(canonical["citacao"], "TLS obrigatório.")
+        self.assertEqual(canonical["evidence_sources"], [])
+        self.assertEqual(canonical["referencias"], [])
+
+        valid_payload = {
+            "title": "Lote Teste",
+            "timestamp": "20261117_140000_LOTE",
+            "parecer": "PENDENTE DE ADJUDICAÇÃO",
+            "kpis": {
+                "total_achados": 1,
+                "achados_confirmados": 0,
+                "achados_pendentes_adjudicacao": 1,
+                "criticos": 0,
+                "lacunas": 0,
+                "iqd": "—",
+                "iqd_denominador": 30,
+            },
+            "baseline_files": [],
+            "skills_ativas": ["analisar-documento"],
+            "findings": [{**canonical, "adjudication_status": "pendente"}],
+        }
+        self.assertEqual(schemas.validate_dados_analise_schema(valid_payload), [])
+
+        broken_payload = {
+            **valid_payload,
+            "parecer": "APTO PARA DECISÃO",
+            "kpis": {**valid_payload["kpis"], "iqd": "95.0%"},
+            "findings": [{
+                **canonical,
+                "criticidade": "Crítica",
+                "evidencia": "E1",
+                "adjudication_status": "confirmado",
+            }],
+        }
+        issues = schemas.validate_dados_analise_schema(broken_payload)
+        self.assertTrue(any("PENDENTE DE ADJUDICAÇÃO" in msg for msg in issues))
+        self.assertTrue(any("'kpis.iqd'" in msg for msg in issues))
+        self.assertTrue(any("E2 ou E3" in msg for msg in issues))
+
+    def test_checklist_denominator_and_tabular_formula_sum_controls(self):
+        import audit_engine
+        import tabular_visual_controls
+
+        denom = audit_engine.compute_checklist_denominator(
+            str(REPO_ROOT),
+            ["editorial.md", "imagens.md", "carrier.md", "contratos.md", "seguranca.md"],
+            num_files=2,
+        )
+        self.assertGreaterEqual(denom, 30)
+        fallback_denom = audit_engine.compute_checklist_denominator(str(REPO_ROOT), [], num_files=3)
+        self.assertEqual(fallback_denom, 45)
+
+        sheet_doc = {
+            "name": "orcamento.xlsx",
+            "relative_path": "orcamento.xlsx",
+            "ext": ".xlsx",
+            "sha256": "a" * 64,
+            "text": (
+                "[ABA: Itens]\n"
+                "Item | Quantidade | Valor Total\n"
+                "Roteador Core | 2 | 100.00\n"
+                "Switch Edge | 3 | 200.00\n"
+                "Subtotal | 5 | #REF!\n"
+                "Item | Quantidade | Valor Total\n"
+                "Link MPLS | 1 | 50.00\n"
+                "Link DWDM | 2 | 75.00\n"
+                "Total Geral | 3 | 200.00\n"
+            ),
+        }
+        err_findings = tabular_visual_controls.spreadsheet_formula_or_error_cells([sheet_doc])
+        self.assertEqual(len(err_findings), 1)
+        self.assertEqual(err_findings[0]["rule_id"], "XLS-ERR-001")
+        self.assertEqual(err_findings[0]["loc"], "Linha 5")
+
+        sum_findings = tabular_visual_controls.spreadsheet_total_sum_mismatches([sheet_doc])
+        self.assertEqual(len(sum_findings), 1)
+        self.assertEqual(sum_findings[0]["rule_id"], "XLS-SUM-001")
+        self.assertEqual(len(sum_findings[0]["evidence_sources"]), 2)
+        self.assertEqual(sum_findings[0]["evidence_sources"][0]["location"], "Linha 7")
+        self.assertEqual(sum_findings[0]["evidence_sources"][1]["location"], "Linha 9")
+
+    def test_offline_html_has_no_external_cdns_and_escapes_html(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            timestamp = "20261117_120000_LOTE_XSS"
+            report_dir, _ = self._fixture(root, timestamp=timestamp)
+            data_path = report_dir / "dados_analise.json"
+            data = json.loads(data_path.read_text(encoding="utf-8"))
+            finding = dict(data["findings"][0])
+            finding["title"] = "<script>alert(1)</script> Falha XSS"
+            finding["de"] = "<img src=x onerror=alert(2)>"
+            finding["para"] = "Texto seguro"
+            finding["is_direct"] = True
+            data["findings"] = [finding]
+            data_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+            with patch.object(server, "get_workspace_root", return_value=str(root)):
+                server.tool_adjudicate_findings(timestamp, [{
+                    "finding_id": "FIND-1",
+                    "status": "confirmado",
+                    "rationale": "Citação literal confirmada para teste de escapamento HTML.",
+                }])
+
+            report_html = (report_dir / "index.html").read_text(encoding="utf-8")
+            master_html = (root / "analise" / "index.html").read_text(encoding="utf-8")
+            self.assertNotIn("<img src=x onerror=alert(2)>", report_html)
+            self.assertIn("&lt;img src=x onerror=alert(2)&gt;", report_html)
+            for compiled in (report_html, master_html):
+                self.assertNotIn("fonts.googleapis.com", compiled)
+                self.assertNotIn("cdnjs.cloudflare.com", compiled)
+                self.assertNotIn("<script>alert(1)</script>", compiled)
+                self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", compiled)
+
+    def test_framework_normative_documents_self_audit(self):
+        targets = (
+            REPO_ROOT / "framework" / "revisao.md",
+            REPO_ROOT / "framework" / "templates" / "modelo_skill.md",
+            REPO_ROOT / "framework" / "checklists" / "editorial.md",
+            REPO_ROOT / "framework" / "checklists" / "imagens.md",
+        )
+        for doc in targets:
+            findings = server.analyze_document_structure(str(doc))
+            ids = {f["id"] for f in findings}
+            self.assertNotIn("EDIT-001", ids, f"Marcador de rascunho inesperado em {doc}")
+            self.assertNotIn("EDIT-002", ids, f"Erro de codificação inesperado em {doc}")
+            self.assertNotIn("EDIT-007", ids, f"Salto numérico inesperado em {doc}")
+
 
 if __name__ == "__main__":
     unittest.main()

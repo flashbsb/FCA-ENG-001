@@ -58,6 +58,7 @@ flowchart TD
 │       └── analisar-rfp/                # Requests for Proposal (RFPs e RFIs)
 ├── mcp-server/
 │   ├── server.py                        # Servidor MCP: extração, controles e persistência auditável (20 ferramentas)
+│   ├── schemas.py                       # Contrato de schema canônico SSOT (dados_analise.json)
 │   ├── audit_engine.py                  # Motor de cálculo dinâmico de IQD, parecer e reconciliação de versões
 │   ├── audit_pipeline.py                # Normalização, sanitização de lote e conflitos cruzados
 │   ├── semantic_pipeline.py             # Contrato de evidência e escopos da revisão semântica

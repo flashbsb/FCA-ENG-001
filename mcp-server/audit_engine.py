@@ -9,7 +9,33 @@ import os
 import re
 import math
 import json
+import schemas
 from audit_pipeline import sanitize_batch_isolation, clean_unicode_text
+
+
+def compute_checklist_denominator(root_dir: str, active_checklists: list[str], num_files: int = 1) -> int:
+    """Calcula o denominador do IQD a partir dos itens aplicáveis dos checklists ativos."""
+    total_items = 0
+    sep_rx = re.compile(r"^\|(?:\s*:?-+:?\s*\|)+\s*$")
+    for chk in active_checklists or []:
+        chk_path = os.path.join(root_dir, "framework", "checklists", str(chk)) if root_dir else ""
+        if not chk_path or not os.path.isfile(chk_path):
+            continue
+        try:
+            with open(chk_path, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.read().splitlines()
+        except Exception:
+            continue
+        for idx, raw in enumerate(lines):
+            stripped = raw.strip()
+            if not stripped.startswith("|") or sep_rx.match(stripped):
+                continue
+            if idx + 1 < len(lines) and sep_rx.match(lines[idx + 1].strip()):
+                continue
+            total_items += 1
+    if total_items > 0:
+        return max(total_items, max(num_files, 1) * 10, 30)
+    return max(max(num_files, 1) * 15, 30)
 
 
 
@@ -136,6 +162,7 @@ def generate_6_reports(rel_dir: str, data: dict) -> str:
         for optional_key in ("adjudication", "adjudication_status", "texto_afirmado", "diagrama_demonstrado"):
             if optional_key in a and a[optional_key] is not None:
                 item[optional_key] = a[optional_key]
+        item = schemas.ensure_canonical_finding_fields(item)
         normalized_findings.append(item)
 
     valid_adjudication_statuses = {
