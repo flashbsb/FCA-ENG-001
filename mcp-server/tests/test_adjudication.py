@@ -24,12 +24,19 @@ class FindingAdjudicationTests(unittest.TestCase):
             handler.assert_called_once_with("t", [])
 
     def _fixture(self, root: pathlib.Path, timestamp: str = "20261010_120000_LOTE_TESTE") -> tuple[pathlib.Path, pathlib.Path]:
-        source_rel = pathlib.Path("entrada/LOTE_TESTE/requisitos.txt")
+        parts = timestamp.split("_", 2)
+        lote_folder = parts[2] if len(parts) > 2 else "LOTE_TESTE"
+        source_rel = pathlib.Path(f"entrada/{lote_folder}/requisitos.txt")
         source_path = root / source_rel
         source_path.parent.mkdir(parents=True)
         source_text = "A API deverá usar TLS 1.3.\nA API pode utilizar mTLS."
         source_path.write_text(source_text, encoding="utf-8")
         digest = hashlib.sha256(source_path.read_bytes()).hexdigest()
+
+        # Também copia para analise/<timestamp>/entrada/ para garantir resolução canônica
+        analise_ent = root / "analise" / timestamp / "entrada"
+        analise_ent.mkdir(parents=True, exist_ok=True)
+        (analise_ent / "requisitos.txt").write_text(source_text, encoding="utf-8")
 
         report_dir = root / "analise" / timestamp / "relatorios"
         report_dir.mkdir(parents=True)

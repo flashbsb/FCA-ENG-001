@@ -17,20 +17,20 @@ import server
 
 class DocumentRoleSegregationTests(unittest.TestCase):
     def test_classify_batch_document_roles_auto_explicit_and_external(self):
-        lote_name = "01 - High Level Design EAF SDWAN SEGURO"
+        lote_name = "01 - High Level Design Enterprise SDWAN"
         files = [
-            "High Level Design EAF SDWAN SEGURO v1.2.pdf",
-            "HLD EAF GERENCIA FORTINETv1.4.pdf",
+            "High Level Design Enterprise SDWAN v1.2.pdf",
+            "HLD Enterprise Gerencia v1.4.pdf",
             "HLD_DCN-v1.0.pdf",
-            "High_Level_Design_EAF_SDWAN_SEGURO_v1_2_pdf_Relatorio_Analise_GPTC_v1.1_20261109_152500.html",
+            "High_Level_Design_Enterprise_SDWAN_v1_2_pdf_Relatorio_Analise_Externo_v1.1_20261109_152500.html",
             "insumos_externos/nota_revisao.md",
         ]
         roles = server._classify_batch_document_roles(lote_name, files)
-        self.assertEqual(roles["High Level Design EAF SDWAN SEGURO v1.2.pdf"], "alvo_principal")
-        self.assertEqual(roles["HLD EAF GERENCIA FORTINETv1.4.pdf"], "apoio_cruzamento")
+        self.assertEqual(roles["High Level Design Enterprise SDWAN v1.2.pdf"], "alvo_principal")
+        self.assertEqual(roles["HLD Enterprise Gerencia v1.4.pdf"], "apoio_cruzamento")
         self.assertEqual(roles["HLD_DCN-v1.0.pdf"], "apoio_cruzamento")
         self.assertEqual(
-            roles["High_Level_Design_EAF_SDWAN_SEGURO_v1_2_pdf_Relatorio_Analise_GPTC_v1.1_20261109_152500.html"],
+            roles["High_Level_Design_Enterprise_SDWAN_v1_2_pdf_Relatorio_Analise_Externo_v1.1_20261109_152500.html"],
             "insumo_externo",
         )
         self.assertEqual(roles["insumos_externos/nota_revisao.md"], "insumo_externo")
@@ -54,7 +54,7 @@ class DocumentRoleSegregationTests(unittest.TestCase):
             lote_name, files, primary_files=["HLD_DCN-v1.0.pdf"]
         )
         self.assertEqual(override_roles["HLD_DCN-v1.0.pdf"], "alvo_principal")
-        self.assertEqual(override_roles["High Level Design EAF SDWAN SEGURO v1.2.pdf"], "apoio_cruzamento")
+        self.assertEqual(override_roles["High Level Design Enterprise SDWAN v1.2.pdf"], "apoio_cruzamento")
 
     def test_build_required_scopes_focuses_on_alvo_principal_and_keeps_planilha(self):
         docs = [
@@ -136,7 +136,7 @@ class DocumentRoleSegregationTests(unittest.TestCase):
             )
             support_file = lote_dir / "HLD Gerencia v1.4.txt"
             support_file.write_text(
-                "HLD Gerencia Fortinet.\n"
+                "HLD Gerencia Central.\n"
                 "Topologia com cluster em HA sem definição adicional.\n"
                 "A disponibilidade e SLA da gerência exige 99.5%.\n"
                 "Parâmetro interno marcado como TBD no documento de apoio.\n",

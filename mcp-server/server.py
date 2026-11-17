@@ -1920,7 +1920,7 @@ def _classify_batch_document_roles(
     """Classifica cada arquivo do lote como alvo_principal, apoio_cruzamento ou insumo_externo."""
     stopwords = {
         "01", "02", "03", "04", "05", "lote", "hld", "lld", "rfp", "rfi",
-        "et", "ntp", "eaf", "pdf", "docx", "xlsx",
+        "et", "ntp", "pdf", "docx", "xlsx",
     }
 
     def _ascii_lower(txt: str) -> str:

@@ -2082,6 +2082,10 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
                 </div>
             </section>
 
+            <footer class="fca-footer" style="margin-top: 40px; padding: 20px 10px; border-top: 1px solid var(--border, #e2e8f0); text-align: center; font-size: 0.75rem; color: var(--text-muted, #64748b);">
+                <span>Relatório gerado pelo framework corporativo <strong>FCA-ENG-001</strong> (Revisão Técnica Independente) · Repositório oficial: <a href="https://github.com/flashbsb/FCA-ENG-001" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">https://github.com/flashbsb/FCA-ENG-001</a></span>
+            </footer>
+
         </main>
     </div>
 
@@ -2829,6 +2833,10 @@ def compile_evolution_html(target_identifier: str, root_dir: str = None) -> dict
         </section>
 
         {transitions_html}
+
+        <footer class="fca-footer" style="margin-top: 40px; padding: 20px 10px; border-top: 1px solid var(--border, #e2e8f0); text-align: center; font-size: 0.75rem; color: var(--text-muted, #64748b);">
+            <span>Relatório evolutivo gerado pelo framework corporativo <strong>FCA-ENG-001</strong> (Revisão Técnica Independente) · Repositório oficial: <a href="https://github.com/flashbsb/FCA-ENG-001" target="_blank" rel="noopener noreferrer" style="color: inherit; text-decoration: underline;">https://github.com/flashbsb/FCA-ENG-001</a></span>
+        </footer>
     </main>
 </body>
 </html>"""

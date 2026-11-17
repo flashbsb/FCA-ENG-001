@@ -210,13 +210,13 @@ class EvolutionHtmlTests(unittest.TestCase):
                         tipo="Lacuna",
                         loc="Seção 5.1",
                         evid="Sessao BGP sem hold-timer.",
-                        origin_note="Confronto cross-check GPTC-EXT-01 na baseline",
+                        origin_note="Confronto cross-check EXT-01 na baseline",
                     )
                 )
                 r2_data["external_inputs"] = [
                     {
-                        "name": "Relatorio_Externo_GPTC_v1.1.html",
-                        "path": "insumos_externos/Relatorio_Externo_GPTC_v1.1.html",
+                        "name": "Relatorio_Externo_Auditoria_v1.1.html",
+                        "path": "insumos_externos/Relatorio_Externo_Auditoria_v1.1.html",
                         "hash_sha256": "ccc",
                         "role": "insumo_externo",
                         "normative_source": False,

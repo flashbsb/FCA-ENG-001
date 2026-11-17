@@ -1,0 +1,5 @@
+#!/bin/sh
+# FCA-ENG-001 Pre-Push Hook
+# Garante que nenhum dado sensível de produção ou arquivos proibidos sejam enviados ao GitHub.
+
+python3 scripts/check_sensitive_data.py --unpushed

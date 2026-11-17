@@ -31,6 +31,10 @@ Todas as alterações graduais, correções e melhorias arquiteturais implementa
   - Adição das tabelas de **Cobertura de Extração**, **Matriz de Escopos da Revisão Semântica** e **Memória de Cálculo do IQD** na Seção 8 (`_build_rastrea_html`).
   - Inclusão da badge de grau de evidência e do bloco **Evidência Documental (Baseline)** (citações literais + referências normativas) nas Fichas 360°, exclusão de falsos positivos/duplicados/fora de escopo e placeholders vazios no Caderno de Erratas De → Para, cálculo de `kpis["estruturais"]` e alinhamento do filtro JavaScript `applyFilters()`.
   - Deduplicação por lote (`latest_runs` / `total_unique_lotes`) no cálculo de `total_criticos`, `total_lacunas` e `avg_iqd_str` em `tool_build_master_index` (`mcp-server/server.py`).
+  - Inclusão de rodapé discreto com link de referência ao repositório oficial (`https://github.com/flashbsb/FCA-ENG-001`) em todos os relatórios HTML (`index.html`, `evolucao.html` e `analise/index.html`).
+- **Segurança Pré-Publicação e Proteção de Dados Sensíveis:**
+  - Criação de `scripts/check_sensitive_data.py` e ganchos Git (`.githooks/pre-commit` e `.githooks/pre-push`) para bloqueio automático de dados sensíveis, credenciais, IPs privados de produção, arquivos de análise e diretórios restritos (`entrada/`, `analise/`).
+  - Sanitização de fixtures sintéticas nos testes unitários (`test_document_roles.py`, `test_evolution_html.py`) e remoção de termos de clientes em `stopwords` (`server.py`).
 
 ### Documentação
 - **Alinhamento Normativo, Checklists e Catálogo MCP (Fase 3):**
