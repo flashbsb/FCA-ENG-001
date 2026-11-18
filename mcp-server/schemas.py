@@ -127,6 +127,23 @@ class KPIsSchema(TypedDict, total=False):
     iqd_denominador: int
 
 
+class FragilidadeDominioSchema(TypedDict, total=False):
+    dominio: str
+    ids: list[str]
+    itens: list[str]
+
+
+class ResumoExecutivoSchema(TypedDict, total=False):
+    assunto_email: str
+    destinatario_sugerido: str
+    avaliacao_maturidade: str
+    conclusao_executiva: str
+    pontos_fortes: list[str]
+    fragilidades_por_dominio: list[FragilidadeDominioSchema]
+    acoes_exigidas: list[str]
+    justificativa_parecer: str
+
+
 class DadosAnaliseSchema(TypedDict, total=False):
     schema_version: str
     title: str
@@ -136,6 +153,7 @@ class DadosAnaliseSchema(TypedDict, total=False):
     decision_status: str
     adjudication_summary: dict[str, int]
     kpis: KPIsSchema
+    resumo_executivo: ResumoExecutivoSchema
     baseline_files: list[dict[str, Any]]
     external_inputs: list[dict[str, Any]]
     review_comments: list[dict[str, Any]]

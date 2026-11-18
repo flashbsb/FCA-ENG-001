@@ -1,6 +1,6 @@
 # Framework Corporativo de Revisão Técnica Independente (FCA-ENG-001)
 
-[![Versão](https://img.shields.io/badge/Versão-1.4.0-blue.svg)](framework/revisao.md)
+[![Versão](https://img.shields.io/badge/Versão-1.4.2-blue.svg)](framework/revisao.md)
 [![Procedimento](https://img.shields.io/badge/Código-FCA--ENG--001-green.svg)](framework/revisao.md)
 
 O **FCA-ENG-001** é um framework padronizado para condução de **Revisão Técnica Independente (RTI)** sobre documentações de engenharia, RFPs, RFIs, HLDs, LLDs, planilhas de especificação, arquitetura de sistemas e contratos de TI/Telecom/Cloud.
@@ -57,10 +57,11 @@ flowchart TD
 │       ├── analisar-planilha/           # Planilhas .xlsx e .csv
 │       └── analisar-rfp/                # Requests for Proposal (RFPs e RFIs)
 ├── mcp-server/
-│   ├── server.py                        # Servidor MCP: extração, controles e persistência auditável (20 ferramentas)
+│   ├── server.py                        # Servidor MCP: extração, controles e persistência auditável (21 ferramentas)
 │   ├── schemas.py                       # Contrato de schema canônico SSOT (dados_analise.json)
 │   ├── audit_engine.py                  # Motor de cálculo dinâmico de IQD, parecer e reconciliação de versões
 │   ├── audit_pipeline.py                # Normalização, sanitização de lote e conflitos cruzados
+│   ├── comments_extractor.py            # Extração estruturada e triangulação de comentários (COM-XXX)
 │   ├── semantic_pipeline.py             # Contrato de evidência e escopos da revisão semântica
 │   ├── visual_pipeline.py               # Extração, renderização e inventário de ativos visuais
 │   ├── specialized_controls.py          # Controles determinísticos especializados (Carrier, Datacenter, LGPD, Contratos)
@@ -68,7 +69,7 @@ flowchart TD
 │   ├── cross_document.py                # Verificações cruzadas entre documentos do lote
 │   ├── tabular_visual_controls.py       # Cruzamento tabular de planilhas e referências visuais
 │   ├── xlsx_fallback.py                 # Leitor nativo de planilhas .xlsx sem dependências externas
-│   ├── html_compiler.py                 # Compilador HTML corporativo consolidado (8 seções)
+│   ├── html_compiler.py                 # Compilador HTML corporativo consolidado (8 seções + minuta de e-mail)
 │   ├── tests/                           # Suíte de testes unitários
 │   └── requirements.txt                 # openpyxl, pypdf, Pillow
 ├── framework/
@@ -85,7 +86,9 @@ flowchart TD
     ├── index.html                       # Central Master de Análises (Portal Executivo)
     ├── manifest.json                    # Catálogo estruturado de todas as análises
     └── 01_Nome_do_Lote/                 # Lote de análise
+        ├── email_resumo_analise_v1.0.md # Minuta executiva exportada sob demanda (opcional)
         └── v1.0/                        # Versão do documento auditado
+            ├── evolucao.html            # Quadro comparativo de evolução entre rodadas/versões
             ├── 20261014_210000/         # Rodada inicial de auditoria (IA)
             │   ├── entrada/             # Cópia fiel da baseline analisada (imutável)
             │   └── relatorios/
@@ -95,6 +98,7 @@ flowchart TD
                 ├── entrada/             # Cópia preservada
                 └── relatorios/
                     ├── dados_analise.json  # Base ajustada com audit_trail
+                    ├── comentarios.json # Comentários triangulados (quando presentes)
                     └── index.html       # Relatório revisado com histórico preservado
 ```
 
@@ -154,8 +158,8 @@ entrada/
 
 | Arquivo | Conteúdo / Função |
 |---------|-------------------|
-| `dados_analise.json` | Base de dados estruturada SSOT contendo metadata, KPIs, Fichas 360°, Erratas, Planos de Ação (`ACT-00X`), Perguntas Formais (`Q-00X`), Lacunas, Riscos, Checklists e Hashes SHA-256 |
-| `index.html` | Dashboard interativo corporativo consolidado com as 8 seções de análise, busca em tempo real, filtros e exportação PDF |
+| `dados_analise.json` | Base de dados estruturada SSOT contendo metadata, `resumo_executivo`, KPIs, Fichas 360°, Erratas, Planos de Ação (`ACT-00X`), Perguntas Formais (`Q-00X`), Lacunas, Riscos, Checklists, `review_comments` e Hashes SHA-256 |
+| `index.html` | Dashboard interativo corporativo consolidado com as 8 seções de análise, **Minuta de E-mail Executivo** com cópia em 1 clique na Seção 1, busca em tempo real, filtros e exportação PDF |
 
 > **IQD** é calculado dinamicamente somente após a adjudicação dos achados confirmados; enquanto houver itens pendentes, exibe `—` para não sugerir uma conclusão prematura. Nenhum valor é hardcoded. A camada semântica é executada pelo modelo chamador; o MCP não faz chamada a um provedor de IA.
 
@@ -174,20 +178,21 @@ entrada/
 }
 ```
 
-**Ferramentas expostas (20):**
+**Ferramentas expostas (21):**
 - `profile_baseline` — triagem semântica adaptativa e diagnóstico de domínios/checklists com geração de `entrada/decisoes.yaml`
 - `check_environment` — auditoria de pacotes Python e utilitários do SO (`poppler-utils`, `tesseract-ocr`, etc.)
 - `freeze_baseline` — hashes SHA-256 e inventário imutável por lote
-- `run_full_audit` — executa auditoria isolada, extrai inventário visual e gera `dados_analise.json` / `index.html` iniciais
+- `run_full_audit` — executa auditoria isolada, extrai inventário visual e comentários (`COM-XXX`) e gera `dados_analise.json` / `index.html` iniciais
 - `analyze_structural_integrity` — verificação determinística dos 7 pilares estruturais e redacionais
 - `get_visual_assets` — retorna blocos MCP de imagem extraídos/renderizados para inspeção multimodal
 - `record_visual_analysis` — persiste ativos revisados e achados visuais (com confronto `texto_afirmado` × `diagrama_demonstrado`)
 - `get_semantic_review_manifest` — plano de escopos Skill × Documento para a revisão semântica
 - `get_semantic_document_chunk` — leitura paginada e rastreável por SHA-256 dos documentos da baseline
-- `record_semantic_analysis` — persiste escopos e achados semânticos com validação de citações literais e evidências E2/E3
+- `record_semantic_analysis` — persiste escopos, achados semânticos (com citações literais e evidências E2/E3) e `executive_summary` opcional no SSOT
 - `adjudicate_findings` — confirma, exclui por falso positivo/escopo/duplicidade ou mantém pendente com trilha de auditoria e evidências
 - `create_review_revision` — cria nova rodada de revisão/adjudicação humana preservando histórico e baseline
-- `reconcile_versions` — compara versões sucessivas gerando diff evolutivo (sanados, reincidentes, novos e variação do IQD)
+- `reconcile_versions` — compara versões sucessivas gerando diff evolutivo (`evolucao.html` com sanados, reincidentes, novos e variação do IQD)
+- `export_executive_email` — exporta sob demanda a minuta de e-mail executivo (`.md`) a partir do SSOT para a pasta raiz do lote em `analise/<lote>/`
 - `extract_docx_summary` — estrutura, parágrafos, tabelas e mídias de `.docx`
 - `extract_xlsx_summary` — abas, cabeçalhos e amostra de dados de `.xlsx`
 - `validate_analise_contract` — verifica a presença de `index.html` e `dados_analise.json` e a cobertura das skills recomendadas

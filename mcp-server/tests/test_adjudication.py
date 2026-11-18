@@ -604,6 +604,72 @@ class FindingAdjudicationTests(unittest.TestCase):
             }])
             self.assertEqual(len(tsv_sum), 1)
 
+    def test_executive_email_panel_semantic_summary_and_export_tool(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = pathlib.Path(temp_dir)
+            report_dir, _ = self._fixture(root)
+            timestamp = "20261010_120000_LOTE_TESTE"
+            with patch.object(server, "get_workspace_root", return_value=str(root)):
+                rev_res = json.loads(server.tool_create_review_revision(
+                    timestamp, reason="Teste minuta de e-mail", reviewer="auditor_senior"
+                ))
+                rev_path = rev_res["new_analysis_path"]
+
+                adj_res = json.loads(server.tool_adjudicate_findings(rev_path, [
+                    {
+                        "finding_id": "FIND-1",
+                        "status": "confirmado",
+                        "rationale": "Trecho confirmado literalmente na linha 2 da baseline.",
+                    },
+                    {
+                        "finding_id": "FIND-2",
+                        "status": "falso_positivo",
+                        "rationale": "Não aplicável ao lote de teste.",
+                    },
+                ]))
+                self.assertEqual(adj_res["pending_adjudication"], 0)
+
+                sem_res = json.loads(server.tool_record_semantic_analysis(
+                    rev_path,
+                    reviewed_scopes=[],
+                    findings=[],
+                    executive_summary={
+                        "assunto_email": "Parecer Teste — HLD <Sandbox>",
+                        "avaliacao_maturidade": "Documento em rascunho técnico com lacunas bloqueadoras.",
+                        "pontos_fortes": ["Topologia Hub-and-Spoke claramente descrita."],
+                        "fragilidades_por_dominio": [
+                            {
+                                "dominio": "Segurança & PKI",
+                                "ids": ["FIND-1"],
+                                "itens": ["Chave privada compartilhada detectada em FIND-1."],
+                            }
+                        ],
+                        "acoes_exigidas": ["Definir PKI/CA pronta antes de aprovação."],
+                    },
+                ))
+                self.assertEqual(sem_res["status"], "success")
+
+                rev_rel = root / "analise" / rev_path / "relatorios"
+                html_txt = (rev_rel / "index.html").read_text(encoding="utf-8")
+                self.assertIn('id="minuta-email-executivo"', html_txt)
+                self.assertIn("Parecer Teste — HLD &lt;Sandbox&gt;", html_txt)
+                self.assertIn("Topologia Hub-and-Spoke claramente descrita.", html_txt)
+                self.assertIn('<a href="#card-FIND-1"', html_txt)
+                self.assertIn("emailPlainText", html_txt)
+                self.assertIn("emailMarkdownText", html_txt)
+
+                export_res = json.loads(server.dispatch_tool("export_executive_email", {
+                    "timestamp": rev_path,
+                    "output_filename": "email_resumo_teste.md",
+                }))
+                self.assertEqual(export_res["status"], "success")
+                exported_path = pathlib.Path(export_res["email_file"])
+                self.assertTrue(exported_path.is_file())
+                self.assertEqual(exported_path.parent, root / "analise" / "LOTE_TESTE")
+                md_txt = exported_path.read_text(encoding="utf-8")
+                self.assertIn("Parecer Teste — HLD <Sandbox>", md_txt)
+                self.assertIn("Topologia Hub-and-Spoke claramente descrita.", md_txt)
+
 
 if __name__ == "__main__":
     unittest.main()

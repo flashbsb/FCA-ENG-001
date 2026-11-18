@@ -4,6 +4,21 @@ Todas as alterações graduais, correções e melhorias arquiteturais implementa
 
 ---
 
+## [1.4.2] - 2026-11-18
+### Adicionado / Melhorado
+- **Minuta de E-mail Executivo Nativa no SSOT e HTML + Ferramenta `export_executive_email`:**
+  - Definição dos contratos `ResumoExecutivoSchema` e `FragilidadeDominioSchema` em `mcp-server/schemas.py` e preservação de `resumo_executivo` em `mcp-server/audit_engine.py` (`generate_6_reports`).
+  - Criação do gerador `build_executive_email_model` e do painel **Minuta de E-mail Executivo para Encaminhamento** (`#minuta-email-executivo`) na Seção 1 (`#resumo`) do `index.html`, com atalho `Minuta E-mail` na barra superior, links clicáveis para as Fichas 360° e cópia em 1 clique (**Texto Formatado para E-mail** via `emailPlainText` e **Markdown** via `emailMarkdownText`) utilizando `textContent` em `copySnippet` (`mcp-server/html_compiler.py`).
+  - Suporte ao parâmetro opcional `executive_summary` (sanitizado via `_sanitize_executive_summary`) em `record_semantic_analysis` e inclusão da 21ª ferramenta MCP `export_executive_email` (`tool_export_executive_email`) em `mcp-server/server.py`, permitindo exportar a minuta `.md` para a pasta raiz do lote (`analise/<lote>/`) sem violar a segregação SSOT de `relatorios/`.
+- **Segregação de Arquivos Comentados, Proteção de Versão e Triangulação (`COM-XXX`):**
+  - Sanitização de sufixos de revisão/anotação (`revgptc`/`rev*`) em `_detect_primary_batch_version` e classificação automática de arquivos sob `INPUT/`, `insumos_externos/` ou com marcador `.revgptc.` como `"insumo_externo"` em `_classify_batch_document_roles` (`mcp-server/server.py`).
+  - Integração de `mcp-server/comments_extractor.py` ao fluxo `tool_run_full_audit` (gerando `comentarios.json`, `comentarios.csv` e `review_comments` no `dados_analise.json`) e renderização da tabela **Triangulação de Comentários e Anotações de Revisão (`COM-XXX`)** na Seção 8 do `index.html` (`mcp-server/html_compiler.py`).
+- **Evolução de Skills, Documentação e Suíte de Testes:**
+  - Atualização dos workflows em `.agents/skills/analisar-documento/SKILL.md` (preenchimento de `executive_summary` e painel de e-mail), `.agents/skills/analisar-hld/SKILL.md` (maturidade decisória, matriz Hardware/RAM × Firmware × BoM/VDOMs, PKI/CA/HSM e cenários de criptografia) e `.agents/skills/analisar-carrier/SKILL.md` (homologação *Carrier*, matriz de demarcação multi-serviço, roteamento iBGP/RR/DCI/BFD/Dual-Stack e observabilidade OSS).
+  - Atualização de `framework/templates/documentos_de_saida.md` e expansão da suíte de testes unitários em `mcp-server/tests/test_adjudication.py`, `mcp-server/tests/test_comments_extractor.py` e `mcp-server/tests/test_document_roles.py` (32 testes).
+
+---
+
 ## [1.4.1] - 2026-11-17
 ### Corrigido
 - **Pipeline e Servidor MCP (Fase 1):**

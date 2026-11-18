@@ -265,6 +265,7 @@ def generate_6_reports(rel_dir: str, data: dict) -> str:
         "version_reconciliation",
         "external_inputs",
         "review_comments",
+        "resumo_executivo",
         "metadata",
     ):
         if extra_key in data and data[extra_key] is not None:

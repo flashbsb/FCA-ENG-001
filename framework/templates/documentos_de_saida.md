@@ -23,7 +23,7 @@ Armazena 100% dos dados estruturados da RTI para auditoria e rastreabilidade tot
 
 O arquivo `index.html` oferece um dashboard interativo moderno organizado nas 8 seções executivas:
 
-1. **1. Resumo Executivo & Matriz de Skills (`#resumo`):** Card Hero com parecer, KPIs, inventário da baseline e badges de skills.
+1. **1. Resumo Executivo & Matriz de Skills (`#resumo`):** Card Hero com parecer, KPIs, inventário da baseline, badges de skills e painel **Minuta de E-mail Executivo para Encaminhamento (`#minuta-email-executivo`)** com cópia em 1 clique (Texto Formatado e Markdown) alimentado pelo objeto `resumo_executivo` do SSOT (podendo ser exportado sob demanda para a pasta raiz do lote via `export_executive_email`).
 2. **2. Matriz Master SSOT (`#matriz-master`):** Tabela panorâmica consolidada de todos os achados com links diretos para as Fichas 360°.
 3. **3. Caderno de Fichas 360° Detalhadas (`#fichas`):** Cards responsivos com busca em tempo real e filtros interativos.
 4. **4. Caderno de Erratas De → Para (`#erratas`):** Tabela de propostas de substituição redacional direta com botão de cópia.

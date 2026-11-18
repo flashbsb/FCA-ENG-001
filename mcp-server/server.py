@@ -2856,7 +2856,39 @@ def tool_adjudicate_findings(timestamp: str, decisions: list[dict]) -> str:
     }, ensure_ascii=False, indent=2)
 
 
-def tool_record_semantic_analysis(timestamp: str, reviewed_scopes: list[dict], findings: list[dict]) -> str:
+def _sanitize_executive_summary(raw_summary: dict) -> dict:
+    """Normaliza e limita campos estruturados do resumo executivo para o SSOT."""
+    if not isinstance(raw_summary, dict):
+        return {}
+    cleaned: dict = {}
+    for str_key in ("assunto_email", "destinatario_sugerido", "avaliacao_maturidade", "conclusao_executiva", "justificativa_parecer"):
+        if str_key in raw_summary and raw_summary.get(str_key) is not None:
+            val = clean_unicode_text(str(raw_summary.get(str_key)).strip())[:5000]
+            if val:
+                cleaned[str_key] = val
+    for list_key in ("pontos_fortes", "acoes_exigidas"):
+        raw_list = raw_summary.get(list_key)
+        if isinstance(raw_list, list):
+            items = [clean_unicode_text(str(x).strip())[:1000] for x in raw_list if str(x).strip()]
+            if items:
+                cleaned[list_key] = items[:30]
+    raw_frag = raw_summary.get("fragilidades_por_dominio")
+    if isinstance(raw_frag, list):
+        frag_items = []
+        for grp in raw_frag[:20]:
+            if not isinstance(grp, dict):
+                continue
+            dom = clean_unicode_text(str(grp.get("dominio") or "").strip())[:300]
+            ids = [clean_unicode_text(str(i).strip())[:64] for i in (grp.get("ids") or []) if str(i).strip()][:30]
+            itens = [clean_unicode_text(str(it).strip())[:1500] for it in (grp.get("itens") or []) if str(it).strip()][:30]
+            if dom and (itens or ids):
+                frag_items.append({"dominio": dom, "ids": ids, "itens": itens})
+        if frag_items:
+            cleaned["fragilidades_por_dominio"] = frag_items
+    return cleaned
+
+
+def tool_record_semantic_analysis(timestamp: str, reviewed_scopes: list[dict], findings: list[dict], executive_summary: dict = None) -> str:
     """Registra a revisão semântica, valida citações contra a baseline e recompila os relatórios."""
     if not _is_valid_analysis_identifier(timestamp):
         raise ValueError("Timestamp de análise inválido.")
@@ -3002,6 +3034,13 @@ def tool_record_semantic_analysis(timestamp: str, reviewed_scopes: list[dict], f
         skill_reviewed = skill_required & all_reviewed_scopes
         if skill_required:
             skill_row["semantic_status"] = "concluída" if skill_required.issubset(skill_reviewed) else ("parcial" if skill_reviewed else "pendente")
+
+    if isinstance(executive_summary, dict) and executive_summary:
+        sanitized_summary = _sanitize_executive_summary(executive_summary)
+        if sanitized_summary:
+            cur_summary = data.get("resumo_executivo") if isinstance(data.get("resumo_executivo"), dict) else {}
+            cur_summary.update(sanitized_summary)
+            data["resumo_executivo"] = cur_summary
 
     master = _refresh_analysis_outputs(data, timestamp, root)
     return json.dumps({
@@ -3418,6 +3457,54 @@ def tool_reconcile_versions(
         "current_analysis": curr_relpath,
         "evolution_html": evo_res.get("evolution_html", ""),
         "reconciliation": reconciliation,
+    }, indent=2, ensure_ascii=False)
+
+
+def tool_export_executive_email(timestamp: str, output_filename: str = None) -> str:
+    """Exporta sob demanda a minuta de e-mail executivo (.md) para a pasta raiz do lote em analise/."""
+    if not _is_valid_analysis_identifier(timestamp):
+        raise ValueError("Timestamp de análise inválido.")
+    root = get_workspace_root()
+    analysis_dir, rel_dir, _, rel_path = _resolve_analysis_dirs(root, timestamp)
+    json_path = os.path.join(rel_dir, "dados_analise.json")
+    if not os.path.isfile(json_path):
+        raise FileNotFoundError("dados_analise.json não encontrado para essa análise.")
+    with open(json_path, "r", encoding="utf-8") as stream:
+        data = json.load(stream)
+
+    import html_compiler
+    email_model = html_compiler.build_executive_email_model(data)
+
+    parts = [p for p in rel_path.replace("\\", "/").split("/") if p]
+    target_dir = os.path.join(root, "analise", parts[0]) if len(parts) >= 2 else analysis_dir
+    os.makedirs(target_dir, exist_ok=True)
+
+    if output_filename and str(output_filename).strip():
+        raw_name = str(output_filename).strip()
+        if "/" in raw_name or "\\" in raw_name or ".." in raw_name:
+            raise ValueError("output_filename deve ser apenas o nome do arquivo, sem caminhos ou '..'.")
+        fname = raw_name if raw_name.lower().endswith(".md") else f"{raw_name}.md"
+    else:
+        ver = str((data.get("metadata") or {}).get("versao_documento") or "v1.0").strip()
+        safe_lote = re.sub(r"[^a-zA-Z0-9_-]+", "_", parts[0]).strip("_").lower() if parts else "lote"
+        fname = f"email_resumo_analise_{safe_lote}_{ver}.md"
+
+    out_path = os.path.join(target_dir, fname)
+    real_dir = os.path.realpath(target_dir)
+    real_out = os.path.realpath(out_path)
+    if os.path.commonpath([real_dir, real_out]) != real_dir:
+        raise ValueError("Caminho de saída do e-mail inválido.")
+
+    with open(out_path, "w", encoding="utf-8") as stream:
+        stream.write(email_model["markdown"])
+
+    return json.dumps({
+        "status": "success",
+        "timestamp": rel_path,
+        "email_file": out_path,
+        "assunto": email_model["assunto"],
+        "parecer": email_model["parecer"],
+        "iqd": email_model["iqd"],
     }, indent=2, ensure_ascii=False)
 
 
@@ -3998,7 +4085,20 @@ TOOLS_MANIFEST = [
                 "referencias": {"type": "array", "items": {"type": "object", "properties": {
                     "titulo": {"type": "string"}, "url": {"type": "string"}, "nota": {"type": "string"}
                 }}}
-            }, "required": ["skill", "title", "tipo", "criticidade", "prioridade", "fato", "impacto"]}}
+            }, "required": ["skill", "title", "tipo", "criticidade", "prioridade", "fato", "impacto"]}},
+            "executive_summary": {
+                "type": "object",
+                "description": "Opcional: síntese executiva estruturada (assunto_email, destinatario_sugerido, avaliacao_maturidade, conclusao_executiva, pontos_fortes, fragilidades_por_dominio, acoes_exigidas) para alimentar a Minuta de E-mail Executivo na Seção 1 do HTML.",
+                "properties": {
+                    "assunto_email": {"type": "string"},
+                    "destinatario_sugerido": {"type": "string"},
+                    "avaliacao_maturidade": {"type": "string"},
+                    "conclusao_executiva": {"type": "string"},
+                    "pontos_fortes": {"type": "array", "items": {"type": "string"}},
+                    "fragilidades_por_dominio": {"type": "array", "items": {"type": "object"}},
+                    "acoes_exigidas": {"type": "array", "items": {"type": "string"}}
+                }
+            }
         }, "required": ["timestamp", "reviewed_scopes", "findings"]}
     },
     {
@@ -4099,6 +4199,14 @@ TOOLS_MANIFEST = [
         }, "required": ["previous_timestamp", "current_timestamp"]}
     },
     {
+        "name": "export_executive_email",
+        "description": "Exporta sob demanda a minuta de e-mail executivo (.md) para a pasta raiz do lote em analise/<lote>/ a partir do dados_analise.json (SSOT).",
+        "inputSchema": {"type": "object", "properties": {
+            "timestamp": {"type": "string", "description": "Timestamp ou caminho relativo da análise."},
+            "output_filename": {"type": "string", "description": "Nome opcional do arquivo .md (apenas basename, ex: email_resumo_analise.md)."}
+        }, "required": ["timestamp"]}
+    },
+    {
         "name": "build_master_index",
         "description": "Recompila analise/index.html e analise/manifest.json varrendo todos os relatórios.",
         "inputSchema": {"type": "object", "properties": {}, "required": []}
@@ -4132,7 +4240,12 @@ def dispatch_tool(name: str, args: dict) -> str:
         return tool_get_semantic_document_chunk(args.get("timestamp", ""), args.get("document_path", ""),
                                                 args.get("start_char", 0), args.get("max_chars", 12000))
     elif name == "record_semantic_analysis":
-        return tool_record_semantic_analysis(args.get("timestamp", ""), args.get("reviewed_scopes", []), args.get("findings", []))
+        return tool_record_semantic_analysis(
+            args.get("timestamp", ""),
+            args.get("reviewed_scopes", []),
+            args.get("findings", []),
+            executive_summary=args.get("executive_summary"),
+        )
     elif name == "adjudicate_findings":
         return tool_adjudicate_findings(args.get("timestamp", ""), args.get("decisions", []))
     elif name == "analyze_structural_integrity":
@@ -4159,6 +4272,8 @@ def dispatch_tool(name: str, args: dict) -> str:
             summary_notes=args.get("summary_notes", ""),
             external_audit_disposition=args.get("external_audit_disposition"),
         )
+    elif name == "export_executive_email":
+        return tool_export_executive_email(args.get("timestamp", ""), output_filename=args.get("output_filename"))
     elif name == "build_master_index":
         return tool_build_master_index()
     else:
@@ -4182,7 +4297,7 @@ def main():
             response = {"jsonrpc": "2.0", "id": req_id, "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "fca-eng-001-rti", "version": "1.4.0"}
+                "serverInfo": {"name": "fca-eng-001-rti", "version": "1.4.2"}
             }}
         elif method == "tools/list":
             response = {"jsonrpc": "2.0", "id": req_id, "result": {"tools": TOOLS_MANIFEST}}

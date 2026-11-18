@@ -261,6 +261,295 @@ def _resolve_image_data_uri_or_path(rel_path: str, base_dir: str = None, max_byt
     return f"./{rel_path}"
 
 
+def build_executive_email_model(data_json: dict) -> dict:
+    """Constroi a minuta estruturada de e-mail executivo (Markdown + texto + estrutura HTML) a partir do SSOT."""
+    resumo_exec = data_json.get("resumo_executivo") if isinstance(data_json.get("resumo_executivo"), dict) else {}
+    kpis = data_json.get("kpis") if isinstance(data_json.get("kpis"), dict) else {}
+    findings = data_json.get("findings") if isinstance(data_json.get("findings"), list) else []
+    confirmed = _confirmed_findings(findings)
+    if not confirmed and not data_json.get("adjudication_summary"):
+        confirmed = list(findings)
+
+    baseline_files = data_json.get("baseline_files") if isinstance(data_json.get("baseline_files"), list) else []
+    review_comments = data_json.get("review_comments") if isinstance(data_json.get("review_comments"), list) else []
+    parecer = clean_unicode_text(str(data_json.get("parecer") or "APTO COM RESSALVAS"))
+    timestamp = clean_unicode_text(str(data_json.get("timestamp") or "—"))
+    title = clean_unicode_text(str(data_json.get("title") or "Revisão Técnica Independente"))
+    meta = data_json.get("metadata") if isinstance(data_json.get("metadata"), dict) else {}
+    versao_doc = clean_unicode_text(str(meta.get("versao_documento") or ""))
+
+    targets = [
+        str(bf.get("name") or os.path.basename(str(bf.get("path", ""))))
+        for bf in baseline_files
+        if str(bf.get("role") or "alvo_principal") == "alvo_principal"
+    ] or [str(bf.get("name") or os.path.basename(str(bf.get("path", "")))) for bf in baseline_files]
+    supports = [
+        str(bf.get("name") or os.path.basename(str(bf.get("path", ""))))
+        for bf in baseline_files
+        if str(bf.get("role") or "") == "apoio_cruzamento"
+    ]
+    main_doc_label = ", ".join(targets[:2]) if targets else title
+    if len(targets) > 2:
+        main_doc_label += f" (+{len(targets) - 2})"
+
+    confirmados_n = int(kpis.get("achados_confirmados", len(confirmed)) or 0)
+    criticos_n = int(kpis.get("criticos", sum(1 for a in confirmed if str(a.get("criticidade", a.get("crit", ""))).casefold() in ("crítica", "critica"))) or 0)
+    altos_n = int(kpis.get("altos", sum(1 for a in confirmed if str(a.get("criticidade", a.get("crit", ""))).casefold() == "alta")) or 0)
+    medios_n = int(kpis.get("medios", sum(1 for a in confirmed if str(a.get("criticidade", a.get("crit", ""))).casefold() in ("média", "media"))) or 0)
+    baixos_n = int(kpis.get("baixos", sum(1 for a in confirmed if str(a.get("criticidade", a.get("crit", ""))).casefold() in ("baixa", "informativa"))) or 0)
+    pendentes_n = int(kpis.get("achados_pendentes_adjudicacao", 0) or 0)
+    perguntas_n = int(kpis.get("perguntas", len(data_json.get("esclarecimentos") or [])) or 0)
+    iqd_val = clean_unicode_text(str(kpis.get("iqd", "—")))
+
+    assunto = clean_unicode_text(str(
+        resumo_exec.get("assunto_email")
+        or f"Parecer Técnico — Revisão Técnica Independente: {main_doc_label} ({parecer})"
+    ))
+    destinatario = clean_unicode_text(str(
+        resumo_exec.get("destinatario_sugerido")
+        or "[Responsável pela demanda / Coordenação Técnica do Projeto]"
+    ))
+
+    referencias = [f"Documento(s)-alvo avaliado(s): `{main_doc_label}`" + (f" ({versao_doc})" if versao_doc else "")]
+    if supports:
+        referencias.append(f"Documentos de correlação avaliados no lote: {', '.join(f'`{s}`' for s in supports)}")
+    referencias.append(f"Relatório Técnico Consolidado (HTML): `analise/{timestamp}/relatorios/index.html`")
+    if review_comments:
+        referencias.append(f"Anotações de revisão trianguladas: {len(review_comments)} item(ns) `COM-001..{len(review_comments):03d}` (Seção 8 do `index.html`)")
+
+    kpis_line = (
+        f"**{confirmados_n} achados válidos** (`{criticos_n} Críticos`, `{altos_n} Altos`, `{medios_n} Médios`, `{baixos_n} Baixos`), "
+        f"**{perguntas_n} perguntas técnicas formais**"
+        + (f" e **{len(review_comments)} anotações trianguladas**" if review_comments else "")
+        + (f" *(atenção: {pendentes_n} achado(s) pendente(s) de adjudicação)*" if pendentes_n else "")
+    )
+
+    avaliacao_maturidade = clean_unicode_text(str(
+        resumo_exec.get("avaliacao_maturidade")
+        or resumo_exec.get("justificativa_parecer")
+        or (
+            f"Auditoria executada conforme procedimento FCA-ENG-001 sobre {len(baseline_files)} arquivo(s) da baseline, "
+            f"resultando no parecer {parecer} (IQD {iqd_val}). "
+            + (
+                f"Foram confirmados {criticos_n} achado(s) crítico(s) e {altos_n} de alta severidade que exigem saneamento antes da aprovação."
+                if criticos_n or altos_n else
+                "Foram identificados apontamentos pontuais para endereçamento e registro formal."
+            )
+        )
+    ))
+
+    conclusao_executiva = clean_unicode_text(str(
+        resumo_exec.get("conclusao_executiva")
+        or (
+            f"Com parecer {parecer}, recomenda-se o endereçamento integral dos achados Críticos (P0) e Altos (P1) listados no relatório HTML antes de submissão para aprovação definitiva ou avanço para implantação/LLD."
+            if "NÃO APTO" in parecer.upper() else
+            f"O parecer atual é {parecer}. Consulte as Fichas 360° e planos de ação no relatório HTML para fechamento das ressalvas e esclarecimentos formais."
+        )
+    ))
+
+    pontos_fortes_raw = resumo_exec.get("pontos_fortes")
+    pontos_fortes = [clean_unicode_text(str(p).strip()) for p in pontos_fortes_raw if str(p).strip()] if isinstance(pontos_fortes_raw, list) else []
+    if not pontos_fortes:
+        checklists_status = data_json.get("checklists_status") if isinstance(data_json.get("checklists_status"), dict) else {}
+        for chk_name, chk_info in checklists_status.items():
+            if not isinstance(chk_info, dict):
+                continue
+            conf_txt = str(chk_info.get("conformidade") or chk_info.get("conformidade_pct") or "").casefold()
+            if "conforme" in conf_txt and "não" not in conf_txt and "nao" not in conf_txt:
+                pontos_fortes.append(f"Conformidade verificada nos controles do domínio `{chk_name}` ({chk_info.get('observacao', 'requisitos básicos atendidos')}).")
+            if len(pontos_fortes) >= 4:
+                break
+        if not pontos_fortes:
+            pontos_fortes = [
+                "Rastreabilidade formal garantida por baseline congelada com hashes SHA-256 e correlação cruzada entre documentos do lote.",
+                f"Cobertura estruturada aplicada com {len(data_json.get('skills_ativas') or [])} skill(s) especializada(s) do framework FCA-ENG-001.",
+            ]
+
+    frag_raw = resumo_exec.get("fragilidades_por_dominio")
+    fragilidades: list[dict] = []
+    if isinstance(frag_raw, list) and frag_raw:
+        for grp in frag_raw:
+            if not isinstance(grp, dict):
+                continue
+            dom = clean_unicode_text(str(grp.get("dominio") or "Achados Técnicos e Estruturais").strip())
+            ids = [clean_unicode_text(str(x).strip()) for x in (grp.get("ids") or []) if str(x).strip()]
+            itens = [clean_unicode_text(str(x).strip()) for x in (grp.get("itens") or []) if str(x).strip()]
+            if dom and (itens or ids):
+                fragilidades.append({"dominio": dom, "ids": ids, "itens": itens})
+
+    if not fragilidades:
+        sev_rank = {"crítica": 0, "critica": 0, "alta": 1, "média": 2, "media": 2, "baixa": 3, "informativa": 4}
+        sorted_conf = sorted(
+            confirmed,
+            key=lambda a: (
+                sev_rank.get(str(a.get("criticidade", a.get("crit", "Média"))).casefold(), 5),
+                str(a.get("id", "")),
+            ),
+        )
+        grouped: dict[str, dict] = {}
+        for a in sorted_conf[:18]:
+            cat = clean_unicode_text(str(a.get("categoria") or a.get("cat") or "Geral"))
+            fid = clean_unicode_text(str(a.get("id") or "ACH-000"))
+            ftitle = clean_unicode_text(str(a.get("title") or a.get("titulo") or ""))
+            crit_lbl = clean_unicode_text(str(a.get("criticidade") or a.get("crit") or "Média"))
+            loc_lbl = clean_unicode_text(str(a.get("loc") or a.get("localizacao") or ""))
+            bucket = grouped.setdefault(cat, {"dominio": cat, "ids": [], "itens": []})
+            bucket["ids"].append(fid)
+            item_desc = f"**[{crit_lbl}] {ftitle}** (`{fid}`)" + (f" — {loc_lbl}" if loc_lbl else "")
+            bucket["itens"].append(item_desc)
+        fragilidades = list(grouped.values())
+
+    acoes_raw = resumo_exec.get("acoes_exigidas")
+    acoes_exigidas = [clean_unicode_text(str(a).strip()) for a in acoes_raw if str(a).strip()] if isinstance(acoes_raw, list) else []
+    if not acoes_exigidas:
+        seen_sols = set()
+        sev_rank = {"crítica": 0, "critica": 0, "alta": 1, "média": 2, "media": 2, "baixa": 3, "informativa": 4}
+        for a in sorted(
+            confirmed,
+            key=lambda x: sev_rank.get(str(x.get("criticidade", x.get("crit", "Média"))).casefold(), 5),
+        ):
+            sol = clean_unicode_text(str(a.get("solucao") or "").strip())
+            fid = clean_unicode_text(str(a.get("id") or ""))
+            ftit = clean_unicode_text(str(a.get("title") or ""))
+            if sol and sol not in seen_sols:
+                seen_sols.add(sol)
+                acoes_exigidas.append(f"**{ftit} (`{fid}`):** {sol}")
+            if len(acoes_exigidas) >= 6:
+                break
+        if not acoes_exigidas:
+            acoes_exigidas = ["Revisar integralmente as Fichas 360° e responder às perguntas formais na Seção 5 do relatório HTML."]
+
+    # Monta versao Markdown completa
+    md_lines = [
+        f"**Assunto:** {assunto}  ",
+        f"**Para:** {destinatario}  ",
+        "**Referências:**  ",
+    ]
+    for r in referencias:
+        md_lines.append(f"- {r}  ")
+    md_lines.extend([
+        "",
+        "---",
+        "",
+        "Prezados(as),",
+        "",
+        f"Encaminhamos o Relatório Consolidado da Revisão Técnica Independente (RTI) referente ao lote **{title}** (`{main_doc_label}`), acompanhado deste sumário executivo com pontos fortes, fragilidades críticas identificadas e ações exigidas antes de aprovação/avanço.",
+        "",
+        "## 1. Parecer Executivo",
+        "",
+        f"- **Status na RTI consolidada (`index.html`):** **{parecer}**",
+        f"- **Indicador de Qualidade Documental (IQD):** **{iqd_val}**",
+        f"- **Achados confirmados na matriz do relatório:** {kpis_line}",
+        f"- **Avaliação de maturidade documental:** {avaliacao_maturidade}",
+        "",
+        f"> **Conclusão Executiva:** {conclusao_executiva}",
+        "",
+        "---",
+        "",
+        "## 2. Pontos Fortes Identificados",
+        "",
+    ])
+    for idx, pf in enumerate(pontos_fortes, 1):
+        md_lines.append(f"{idx}. {pf}")
+    md_lines.extend([
+        "",
+        "---",
+        "",
+        "## 3. Pontos Fracos, Lacunas Críticas e Riscos Identificados",
+        "",
+    ])
+    if fragilidades:
+        for idx, grp in enumerate(fragilidades, 1):
+            ids_str = f" ({', '.join(f'`{i}`' for i in grp['ids'])})" if grp["ids"] else ""
+            md_lines.append(f"### 3.{idx}. {grp['dominio']}{ids_str}")
+            for it in grp["itens"]:
+                md_lines.append(f"- {it}")
+            md_lines.append("")
+    else:
+        md_lines.append("- Nenhum achado crítico/alto confirmado nesta análise.\n")
+    md_lines.extend([
+        "---",
+        "",
+        "## 4. Ações Exigidas antes de Nova Submissão / Aprovação",
+        "",
+    ])
+    for idx, ac in enumerate(acoes_exigidas, 1):
+        md_lines.append(f"{idx}. {ac}")
+    md_lines.extend([
+        "",
+        "Permanecemos à disposição para reunião técnica de alinhamento.",
+        "",
+        "Atenciosamente,  ",
+        "**[Sua Assinatura / Equipe de Engenharia e Revisão Técnica]**",
+    ])
+    markdown_txt = "\n".join(md_lines)
+
+    # Monta versao texto limpo para colagem direta no cliente de e-mail
+    def _strip_md(s: str) -> str:
+        s = re.sub(r'\*\*(.+?)\*\*', r'\1', s)
+        s = re.sub(r'\*(.+?)\*', r'\1', s)
+        s = re.sub(r'`([^`]+)`', r'\1', s)
+        return s
+
+    plain_lines = [
+        f"Assunto: {assunto}",
+        f"Para: {destinatario}",
+        "Referências:",
+    ] + [f"  - {_strip_md(r)}" for r in referencias] + [
+        "",
+        "Prezados(as),",
+        "",
+        f"Encaminhamos o Relatório Consolidado da Revisão Técnica Independente (RTI) referente ao lote {title} ({main_doc_label}), acompanhado deste sumário executivo.",
+        "",
+        "1. PARECER EXECUTIVO",
+        f"- Status na RTI: {parecer}",
+        f"- Índice de Qualidade Documental (IQD): {iqd_val}",
+        f"- Achados confirmados: {_strip_md(kpis_line)}",
+        f"- Avaliação de maturidade: {_strip_md(avaliacao_maturidade)}",
+        f"- Conclusão executiva: {_strip_md(conclusao_executiva)}",
+        "",
+        "2. PONTOS FORTES IDENTIFICADOS",
+    ] + [f"{idx}. {_strip_md(pf)}" for idx, pf in enumerate(pontos_fortes, 1)] + [
+        "",
+        "3. PONTOS FRACOS, LACUNAS CRÍTICAS E RISCOS IDENTIFICADOS",
+    ]
+    for idx, grp in enumerate(fragilidades, 1):
+        ids_str = f" ({', '.join(grp['ids'])})" if grp["ids"] else ""
+        plain_lines.append(f"3.{idx}. {grp['dominio']}{ids_str}")
+        for it in grp["itens"]:
+            plain_lines.append(f"  - {_strip_md(it)}")
+    plain_lines.extend([
+        "",
+        "4. AÇÕES EXIGIDAS ANTES DE NOVA SUBMISSÃO / APROVAÇÃO",
+    ])
+    for idx, ac in enumerate(acoes_exigidas, 1):
+        plain_lines.append(f"{idx}. {_strip_md(ac)}")
+    plain_lines.extend([
+        "",
+        "Permanecemos à disposição para reunião técnica de alinhamento.",
+        "",
+        "Atenciosamente,",
+        "[Sua Assinatura / Equipe de Engenharia e Revisão Técnica]",
+    ])
+    plain_txt = "\n".join(plain_lines)
+
+    return {
+        "assunto": assunto,
+        "destinatario": destinatario,
+        "referencias": referencias,
+        "parecer": parecer,
+        "iqd": iqd_val,
+        "kpis_line": kpis_line,
+        "avaliacao_maturidade": avaliacao_maturidade,
+        "conclusao_executiva": conclusao_executiva,
+        "pontos_fortes": pontos_fortes,
+        "fragilidades_por_dominio": fragilidades,
+        "acoes_exigidas": acoes_exigidas,
+        "markdown": markdown_txt,
+        "plain_text": plain_txt,
+    }
+
+
 def _build_resumo_html(data_json: dict) -> str:
     resumo_md = data_json.get("resumo_md", "").strip()
     if resumo_md and not data_json.get("adjudication_summary"):
@@ -295,6 +584,73 @@ def _build_resumo_html(data_json: dict) -> str:
         f'<span class="badge-skill" style="display:inline-block; margin:4px; padding:6px 12px; background:var(--primary-light); color:var(--primary); border-radius:6px; font-weight:600;"><i class="fa-solid fa-microchip"></i> {html.escape(str(s))}</span>'
         for s in skills_ativas
     ])
+
+    email_model = build_executive_email_model(data_json)
+    known_ids = {str(f.get("id", "")) for f in (data_json.get("findings") or []) if f.get("id")}
+
+    def _render_email_line(txt: str) -> str:
+        safe = _inline_md(html.escape(txt), linkify_ids=False)
+        for fid in sorted(known_ids, key=len, reverse=True):
+            esc_fid = html.escape(fid)
+            href_fid = html.escape(fid, quote=True)
+            safe = re.sub(
+                rf'(?<![A-Za-z0-9_-]){re.escape(esc_fid)}(?![A-Za-z0-9_-])',
+                f'<a href="#card-{href_fid}" class="ssot-link">{esc_fid}</a>',
+                safe,
+            )
+        return safe
+
+    refs_html = "".join(f"<li>{_render_email_line(r)}</li>" for r in email_model["referencias"])
+    pf_html = "".join(f"<li>{_render_email_line(pf)}</li>" for pf in email_model["pontos_fortes"])
+    frag_html = ""
+    for idx, grp in enumerate(email_model["fragilidades_por_dominio"], 1):
+        id_badges = " ".join(
+            (
+                f'<a href="#card-{html.escape(i, quote=True)}" class="ssot-link">{html.escape(i)}</a>'
+                if i in known_ids else f'<code>{html.escape(i)}</code>'
+            )
+            for i in grp.get("ids", [])
+        )
+        itens_li = "".join(f"<li>{_render_email_line(it)}</li>" for it in grp.get("itens", []))
+        frag_html += (
+            f"<div class='email-domain-block'>"
+            f"<h5>3.{idx}. {html.escape(grp['dominio'])}{' — ' + id_badges if id_badges else ''}</h5>"
+            f"<ul>{itens_li}</ul></div>"
+        )
+    acoes_li = "".join(f"<li>{_render_email_line(ac)}</li>" for ac in email_model["acoes_exigidas"])
+
+    email_box_html = f"""
+        <div id="minuta-email-executivo" class="email-executivo-box">
+            <div class="email-executivo-header">
+                <div>
+                    <h4 style="margin:0; color:var(--secondary);"><i class="fa-solid fa-envelope-open-text" style="color:#0d9488;"></i> Minuta de E-mail Executivo para Encaminhamento</h4>
+                    <small style="color:var(--text-muted);">Gerada automaticamente a partir do SSOT atual ({html.escape(email_model['parecer'])} · IQD {html.escape(email_model['iqd'])}).</small>
+                </div>
+                <div class="email-executivo-actions">
+                    <button class="btn-copy" onclick="copySnippet('emailPlainText', this)"><i class="fa-solid fa-copy"></i> Copiar para E-mail (Texto)</button>
+                    <button class="btn-copy" style="background:#0f766e;" onclick="copySnippet('emailMarkdownText', this)"><i class="fa-solid fa-file-lines"></i> Copiar em Markdown (.md)</button>
+                </div>
+            </div>
+            <div class="email-executivo-preview">
+                <p><strong>Assunto:</strong> {html.escape(email_model['assunto'])}</p>
+                <p><strong>Para:</strong> {html.escape(email_model['destinatario'])}</p>
+                <p><strong>Referências:</strong></p>
+                <ul>{refs_html}</ul>
+                <hr class="md-hr">
+                <p><strong>1. Parecer Executivo:</strong> <strong>{html.escape(email_model['parecer'])}</strong> · IQD <strong>{html.escape(email_model['iqd'])}</strong> · {_render_email_line(email_model['kpis_line'])}</p>
+                <p><strong>Maturidade Documental:</strong> {_render_email_line(email_model['avaliacao_maturidade'])}</p>
+                <blockquote class="md-quote"><strong>Conclusão Executiva:</strong> {_render_email_line(email_model['conclusao_executiva'])}</blockquote>
+                <p style="margin-top:12px;"><strong>2. Pontos Fortes Identificados:</strong></p>
+                <ol>{pf_html}</ol>
+                <p style="margin-top:12px;"><strong>3. Pontos Fracos, Lacunas Críticas e Riscos Identificados:</strong></p>
+                {frag_html}
+                <p style="margin-top:12px;"><strong>4. Ações Exigidas antes de Nova Submissão / Aprovação:</strong></p>
+                <ol>{acoes_li}</ol>
+            </div>
+            <pre id="emailPlainText" style="display:none;">{html.escape(email_model['plain_text'])}</pre>
+            <pre id="emailMarkdownText" style="display:none;">{html.escape(email_model['markdown'])}</pre>
+        </div>
+    """
 
     return f"""
     <div class="resumo-executivo-container">
@@ -338,6 +694,7 @@ def _build_resumo_html(data_json: dict) -> str:
         <div class="skills-grid" style="margin-top:10px;">
             {skills_badges}
         </div>
+        {email_box_html}
     </div>
     """
 
@@ -1549,6 +1906,9 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
         .fa-user-gear::before {{ content: "⚙"; }}
         .fa-microchip::before {{ content: "⚙"; }}
         .fa-code-compare::before {{ content: "⇄"; }}
+        .fa-envelope::before {{ content: "✉"; }}
+        .fa-envelope-open-text::before {{ content: "✉"; }}
+        .fa-comments::before {{ content: "💬"; }}
 
         /* Navbar Fixa Superior */
         .top-navbar {{
@@ -1927,6 +2287,14 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
         .visual-evidence {{ margin:12px 0; border:1px solid var(--border); border-radius:8px; padding:10px; background:#f8fafc; }}
         .visual-evidence img {{ max-width:100%; max-height:280px; object-fit:contain; display:block; margin:8px auto; }}
 
+        .email-executivo-box {{ margin-top: 28px; background: #f8fafc; border: 1px solid #cbd5e1; border-left: 5px solid #0d9488; border-radius: 10px; padding: 18px; }}
+        .email-executivo-header {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; padding-bottom: 12px; border-bottom: 1px solid var(--border); margin-bottom: 14px; }}
+        .email-executivo-actions {{ display: flex; gap: 8px; flex-wrap: wrap; }}
+        .email-executivo-preview p, .email-executivo-preview li {{ font-size: 0.86rem; line-height: 1.55; margin-bottom: 4px; }}
+        .email-executivo-preview ul, .email-executivo-preview ol {{ margin-left: 20px; margin-bottom: 10px; }}
+        .email-domain-block {{ margin-top: 10px; padding: 10px 12px; background: #ffffff; border: 1px solid var(--border); border-radius: 8px; }}
+        .email-domain-block h5 {{ margin-bottom: 6px; font-size: 0.9rem; color: var(--secondary); }}
+
         /* Print Styles */
         @media print {{
             .top-navbar, .sidebar-nav, .filter-toolbar, .btn-copy {{ display: none !important; }}
@@ -1945,6 +2313,7 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
         </div>
         <div class="actions-group">
             {evolution_nav_btn}
+            <a href="#minuta-email-executivo" class="btn-action" style="background:#0d9488;"><i class="fa-solid fa-envelope"></i> Minuta E-mail</a>
             <a href="{master_href}" class="btn-action btn-master-home"><i class="fa-solid fa-house"></i> Central Master</a>
             <button class="btn-action btn-toggle-menu" onclick="toggleSidebar()"><i class="fa-solid fa-bars"></i> Menu</button>
             <button class="btn-action btn-print" onclick="window.print()"><i class="fa-solid fa-print"></i> Imprimir / PDF</button>
@@ -2218,7 +2587,10 @@ def compile_timestamp_html(timestamp: str, root_dir: str = None) -> str:
         }}
 
         function copySnippet(elementId, btn) {{
-            const text = document.getElementById(elementId).innerText.replace(/^"|"$/g, '');
+            const el = document.getElementById(elementId);
+            if (!el) return;
+            const raw = (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') ? el.value : (el.textContent || el.innerText || '');
+            const text = raw.replace(/^"|"$/g, '');
             navigator.clipboard.writeText(text).then(() => {{
                 const originalText = btn.innerHTML;
                 btn.innerHTML = '<i class="fa-solid fa-check"></i> Copiado!';
