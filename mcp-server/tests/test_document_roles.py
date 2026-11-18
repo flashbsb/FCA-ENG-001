@@ -35,6 +35,26 @@ class DocumentRoleSegregationTests(unittest.TestCase):
         )
         self.assertEqual(roles["insumos_externos/nota_revisao.md"], "insumo_externo")
 
+        # Arquivo comentado (.revgptc.) e pasta INPUT/ são classificados como insumo_externo e não alteram versão principal
+        rev_files = [
+            "High Level Design EAF SDWAN SEGURO v1.2.pdf",
+            "INPUT/High Level Design EAF SDWAN SEGURO v1.2.revgptc.1.9.pdf",
+            "High Level Design EAF SDWAN SEGURO v1.2.revgptc.1.9.pdf",
+        ]
+        rev_roles = server._classify_batch_document_roles("01 - High Level Design EAF SDWAN SEGURO", rev_files)
+        self.assertEqual(rev_roles["High Level Design EAF SDWAN SEGURO v1.2.pdf"], "alvo_principal")
+        self.assertEqual(rev_roles["INPUT/High Level Design EAF SDWAN SEGURO v1.2.revgptc.1.9.pdf"], "insumo_externo")
+        self.assertEqual(rev_roles["High Level Design EAF SDWAN SEGURO v1.2.revgptc.1.9.pdf"], "insumo_externo")
+
+        version_detected = server._detect_primary_batch_version(
+            "01 - High Level Design EAF SDWAN SEGURO",
+            [
+                {"name": "High Level Design EAF SDWAN SEGURO v1.2.revgptc.1.9.pdf", "role": "alvo_principal"},
+                {"name": "High Level Design EAF SDWAN SEGURO v1.2.pdf", "role": "alvo_principal"},
+            ],
+        )
+        self.assertEqual(version_detected, "v1.2")
+
         # Empate (todos sem interseção com nome genérico de lote) -> todos são alvo_principal
         peer_roles = server._classify_batch_document_roles(
             "lote-exemplo-rfp",

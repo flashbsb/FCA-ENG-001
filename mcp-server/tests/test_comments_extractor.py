@@ -87,6 +87,33 @@ class TestCommentsExtractor(unittest.TestCase):
             self.assertEqual(len(loaded), 1)
             self.assertEqual(loaded[0]["id_anotacao"], "COM-001")
 
+    def test_html_compiler_renders_review_comments_table(self):
+        """Valida que _build_rastrea_html renderiza a tabela COM-XXX quando há comentários triangulados."""
+        import html_compiler
+        sample_data = {
+            "timestamp": "lote/v1.0/20261118_000000_lote",
+            "baseline_files": [],
+            "skills_ativas": ["analisar-documento"],
+            "kpis": {"iqd": "90.0%", "total_achados": 1},
+            "review_comments": [
+                {
+                    "id_anotacao": "COM-001",
+                    "documento": "HLD.revgptc.1.9.pdf",
+                    "pagina_ou_secao": "Pág. 125",
+                    "autor": "Engenheiro Carrier",
+                    "item_referenciado": "FG-40F UTP",
+                    "comentario": "Validar 2 GB RAM no FortiOS 7.6.",
+                    "status_triangulacao": "PROCEDENTE",
+                    "parecer_triangulacao": "Confirmado contra BoM.",
+                    "achado_id_associado": "SEM-SDW-NEW-12",
+                }
+            ],
+        }
+        rendered = html_compiler._build_rastrea_html(sample_data)
+        self.assertIn("Triangulação de Comentários", rendered)
+        self.assertIn("COM-001", rendered)
+        self.assertIn("SEM-SDW-NEW-12", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

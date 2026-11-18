@@ -39,6 +39,7 @@ import tabular_visual_controls
 import advanced_specialized_controls
 import visual_pipeline
 import semantic_pipeline
+import comments_extractor
 import schemas
 from xlsx_fallback import (
     extract_xlsx_data as extract_xlsx_data_fallback,
@@ -1898,12 +1899,13 @@ def _detect_primary_batch_version(lote_name: str, files_info: list[dict]) -> str
         if not fname:
             continue
         stem = os.path.splitext(fname)[0]
-        matches = re.findall(r"\b(v?\d+(?:\.\d+)+)\b", stem, flags=re.IGNORECASE)
+        clean_stem = re.sub(r"(?:[._\-\s]+rev(?:gptc|isao|iew)?[a-z0-9._\-]*)+$", "", stem, flags=re.IGNORECASE)
+        matches = re.findall(r"\b(v?\d+(?:\.\d+)+)\b", clean_stem or stem, flags=re.IGNORECASE)
         if not matches:
             continue
         ver_raw = matches[-1].lstrip("vV")
         ver_norm = f"v{ver_raw}"
-        file_tokens = set(re.findall(r"[a-z0-9]+", stem.casefold()))
+        file_tokens = set(re.findall(r"[a-z0-9]+", (clean_stem or stem).casefold()))
         overlap = len(lote_tokens & file_tokens)
         score = (overlap, len(file_tokens))
         if overlap > best_score[0] or (overlap == best_score[0] and best_score[0] >= 0 and score > best_score):
@@ -1938,10 +1940,12 @@ def _classify_batch_document_roles(
         norm_low = _ascii_lower(norm_p)
         fname_low = _ascii_lower(os.path.basename(norm_p))
         if (
-            norm_low.startswith("insumos_externos/")
+            norm_low.startswith(("insumos_externos/", "input/"))
             or "/insumos_externos/" in norm_low
+            or "/input/" in norm_low
             or "relatorio_analise" in fname_low
             or "relatorio_complementar" in fname_low
+            or bool(re.search(r"(?:^|[._\-\s])revgptc(?:[._\-\s]|\d|$)", fname_low))
         ):
             roles[orig_path] = "insumo_externo"
         else:
@@ -2140,6 +2144,10 @@ def tool_run_full_audit(lote_path: str = None, primary_files: list[str] = None) 
                 'destinatario': item.get('proprietario', 'Comissão Técnica / Gestor do Processo')
             })
 
+        review_comments = comments_extractor.extract_all_comments_from_lote(lote_dir)
+        if review_comments:
+            comments_extractor.export_comments_artifacts(review_comments, rel_dir)
+
         data = {
             'title': f"{lote_name.replace('_', ' ')}",
             'timestamp': ts,
@@ -2150,6 +2158,7 @@ def tool_run_full_audit(lote_path: str = None, primary_files: list[str] = None) 
             },
             'baseline_files': baseline_files,
             'external_inputs': external_inputs,
+            'review_comments': review_comments,
             'achados': all_findings,
             'lacunas': lacunas_list,
             'riscos': riscos_list,

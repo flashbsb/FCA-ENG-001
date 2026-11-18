@@ -138,6 +138,7 @@ class DadosAnaliseSchema(TypedDict, total=False):
     kpis: KPIsSchema
     baseline_files: list[dict[str, Any]]
     external_inputs: list[dict[str, Any]]
+    review_comments: list[dict[str, Any]]
     skills_ativas: list[str]
     findings: list[FindingSchema]
     lacunas: list[dict[str, Any]]

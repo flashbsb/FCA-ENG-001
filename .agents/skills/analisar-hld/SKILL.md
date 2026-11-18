@@ -32,6 +32,7 @@ Verifique se o documento contém:
 - [ ] Premissas e dependências externas
 - [ ] Restrições conhecidas
 - [ ] Padrões e referências normativas aplicadas
+- [ ] Maturidade decisória: separação clara entre conteúdo conceitual/didático de fabricante e definições fechadas do projeto (sem alternativas com `"ou"`, validações adiadas para laboratório sem critério objetivo de aceite ou encerramento sem conclusão/RACI/aprovação)
 
 Ausência de qualquer item acima = **Lacuna** com Criticidade conforme impacto no objetivo.
 
@@ -42,10 +43,12 @@ Ausência de qualquer item acima = **Lacuna** com Criticidade conforme impacto n
 - Para Datacenter: verificar Tier declarado vs recursos de energia, refrigeração e conectividade descritos.
 - Para redes: verificar dual-homing, anel de proteção, diversidade de percurso.
 
-### 3. Análise de Escalabilidade
+### 3. Análise de Escalabilidade e Viabilidade Hardware × Firmware × BoM
 
 - O design suporta crescimento horizontal ou vertical? Há declaração explícita dos limites?
 - Existem gargalos arquiteturais não endereçados?
+- Verifique compatibilidade funcional **Hardware (RAM/CPU/portas físicas) × Versão de Firmware recomendada × Subscrições contratadas na BoM** (ex.: modelos com <= 2 GB RAM não suportam recursos baseados em Proxy em versões recentes do FortiOS, impossibilitando a entrega de *Video Filtering* ou proxy-UTM mesmo se adquiridos na BoM; limites reais de túneis em malha dupla e capacidade de portas WAN/ópticas).
+- Verifique o modelo de licenciamento por instância lógica (**VDOMs**, tenants, nós de cluster escalável) frente aos totais da BoM.
 
 ### 4. Análise de Interoperabilidade e Integrações
 
@@ -58,10 +61,11 @@ Ausência de qualquer item acima = **Lacuna** com Criticidade conforme impacto n
 - Para cada requisito funcional/não funcional declarado no documento referenciado (RFP, Contrato, etc.), verifique se há correspondência explícita no HLD.
 - Requisito sem cobertura no design = achado de Lacuna de Cobertura.
 
-### 6. Análise de Segurança Arquitetural
+### 6. Análise de Segurança Arquitetural, PKI e Criptografia
 
 - Identifique zonas de segurança, DMZs, segmentação de rede.
 - Verifique se há declaração de controle de acesso, autenticação e criptografia para cada fluxo de dados sensível.
+- Verifique prontidão da infraestrutura de **PKI / CA / HSM** (túneis, *Deep SSL Inspection* sem chave privada CA única compartilhada em CPEs de campo, certificados de portais administrativos e previsão em BoM) e fechamento arquitetural de elementos dedicados de **criptografia de Estado** (*WAN-to-WAN* vs. *HSM/CA*), sem postergação indefinida para laboratório.
 
 ---
 

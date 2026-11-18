@@ -663,6 +663,67 @@ def _build_rastrea_html(data_json: dict, rel_dir: str = None) -> str:
             </table>
         </div>"""
 
+    review_comments = data_json.get("review_comments", []) or []
+    review_comments_html = ""
+    if review_comments:
+        com_rows = ""
+        for com in review_comments:
+            cid = html.escape(str(com.get("id_anotacao", "COM-000")))
+            cdoc = html.escape(str(com.get("documento", "—")))
+            cloc = html.escape(str(com.get("pagina_ou_secao", "—")))
+            cauth = html.escape(str(com.get("autor", "Revisor")))
+            cref = str(com.get("item_referenciado", "") or "").strip()
+            ctext = str(com.get("comentario", "") or "").strip()
+            cbody = html.escape(ctext)
+            if cref:
+                cbody = f"<strong>Trecho:</strong> <em>{html.escape(cref)}</em><br>{cbody}"
+            cst_raw = str(com.get("status_triangulacao", "PENDENTE"))
+            cst_cf = cst_raw.casefold()
+            cst_cls = (
+                "crit-baixa" if "procedente" in cst_cf and "im" not in cst_cf and "parcial" not in cst_cf
+                else "crit-media" if "parcial" in cst_cf or "refin" in cst_cf or "duvida" in cst_cf or "dúvida" in cst_cf
+                else "crit-critica" if "improcedente" in cst_cf or "rejeit" in cst_cf
+                else "crit-info"
+            )
+            ach_id = str(com.get("achado_id_associado") or "").strip()
+            if ach_id and ach_id != "—":
+                ach_links = ", ".join(
+                    f'<a href="#card-{html.escape(part.strip(), quote=True)}" class="ssot-link">{html.escape(part.strip())}</a>'
+                    for part in ach_id.split(",") if part.strip()
+                )
+            else:
+                ach_links = "—"
+            cparecer = html.escape(str(com.get("parecer_triangulacao", "") or "—"))
+            com_rows += (
+                f"<tr><td><code>{cid}</code></td><td><code>{cdoc}</code><br><small>{cloc}</small></td>"
+                f"<td>{cauth}</td><td>{cbody}</td>"
+                f"<td><span class='badge-crit {cst_cls}'>{html.escape(cst_raw)}</span></td>"
+                f"<td>{ach_links}</td><td>{cparecer}</td></tr>"
+            )
+        review_comments_html = f"""
+        <h3 style="margin-top:35px;">Triangulação de Comentários e Anotações de Revisão (COM-XXX — Não Fonte de Verdade)</h3>
+        <div class="ssot-intro-note">
+            <i class="fa-solid fa-comments"></i> Anotações e comentários extraídos de arquivos de revisão foram triangulados tecnicamente contra a baseline normativa antes da consolidação dos achados.
+        </div>
+        <div class="table-responsive">
+            <table class="rpt-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Documento / Localização</th>
+                        <th>Autor</th>
+                        <th>Comentário / Anotação</th>
+                        <th>Status de Triangulação</th>
+                        <th>Achado Vinculado</th>
+                        <th>Parecer Técnico</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {com_rows}
+                </tbody>
+            </table>
+        </div>"""
+
     # Cobertura de Extração por Arquivo
     coverage = data_json.get("cobertura_extracao", {})
     cov_files = coverage.get("arquivos", []) if isinstance(coverage, dict) else []
@@ -843,6 +904,7 @@ def _build_rastrea_html(data_json: dict, rel_dir: str = None) -> str:
         </div>
 
         {external_inputs_html}
+        {review_comments_html}
         {coverage_table_html}
         {semantic_matrix_html}
         {iqd_memory_html}

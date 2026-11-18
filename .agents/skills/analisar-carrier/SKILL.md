@@ -50,17 +50,18 @@ Esta skill capacita o revisor técnico a auditar documentos de arquitetura, RFPs
 - Verificar a segregação e clareza de atribuições das camadas Core, Edge (PE) e Metro.
 - Verificar os protocolos de roteamento interno (IGP: IS-IS / OSPFv3) e o tempo de convergência/recuperação (< 50ms com BFD + SR-FRR).
 - Para serviços de transporte (P2P, L2VPN, L3VPN): verificar se os parâmetros de MTU (suporte a Jumbo Frames ≥ 9100 bytes), H-QoS (priorização de voz/vídeo/dados) e identificadores de VLAN/VRF estão explicitados.
-- Para a camada SD-WAN: verificar a arquitetura de controle (redundância de controllers), encriptação de overlays, integração com o Backbone Core e failover automático entre links primários e secundários.
+- Para a camada SD-WAN e CPEs de borda *Carrier*: verificar critérios formais de homologação junto à engenharia *Carrier* da operadora, **Matriz de Demarcação Multi-Serviço** (Internet, L2VPN, L3VPN, Pseudowire/PW, OOB, QinQ 802.1ad, EVPN, Engenharia de Tráfego — quando o CPE termina diretamente vs. quando um terminador/EDD/ONT externo é obrigatório) e prevenção de sobre-encapsulamento sobre MPLS; verificar ainda a arquitetura de controle (redundância de controladores), encriptação de overlays, integração com o Backbone Core e failover automático.
 
-### 3. Auditoria de Roteamento BGP, Peering e RPKI
+### 3. Auditoria de Roteamento BGP, Peering, iBGP de Gerência e DCI
 - Verificar a arquitetura de BGP Route Reflectors (redundância de RRs em POPs distintos, cluster ID, prevenções de loop BGP).
+- Verificar para o plano de gerência: topologia **iBGP** explícita, *route-maps*, *route-policies*, prevenção de loops em redistribuição de host routes, uso de **BFD** (evitando dependência de *Performance SLA* em escala na gerência), **propagação via DCI entre DCs** sobre VRFs de gerência e suporte **Dual-Stack (IPv6 + IPv4)** quando aplicável.
 - Verificar políticas de Peering (IXP/PTT e PNI): RPKI ROA Validation ativo, filtragem de bogons, limites de prefixos recebidos (max-prefix).
 - Verificar proteção contra ataques volumétricos: suporte a BGP Flowspec (RFC 8955/5575) e BGP Remote Triggered Blackhole (RTBH).
 
-### 4. Auditoria de DCN (Data Communication Network) & Infraestrutura de Gerência
+### 4. Auditoria de DCN (Data Communication Network), Gerência & Observabilidade OSS
 - Verificar se a rede DCN possui segregação física e lógica Out-Of-Band (OOB) dedicada.
 - Verificar a conectividade física entre Switches DCN (Core/Spine/Leaf) e Firewalls (interfaces 100G/400G, part-numbers de optics, comprimentos de cordões de fibra).
-- Verificar o protocolo de instrumentação: se adota Streaming Telemetry (gNMI/gRPC) suplementado por SNMPv3 trap para eventos assíncronos.
+- Verificar a especificação completa de monitoração pelo **OSS da operadora** nos CPEs e plataformas de gerência: **o que coletar** (métricas/MIBs/OIDs/eventos) e **como coletar** (`SNMPv3 authPriv`, `REST API`, `Syslog`, Streaming Telemetry `gNMI/gRPC`), periodicidade compatível com a escala e limiares operacionais fechados (sem marcadores em aberto).
 - Verificar a política de Break-Glass: se as contas de administrador local dos elementos DCN possuem procedimento de selagem no PAM corporativo e rotação automática compulsória após acionamento de contingência.
 
 ### 5. Auditoria de Metrologia e SLAs Carrier (5-Nines)
