@@ -4,6 +4,19 @@ Todas as alterações graduais, correções e melhorias arquiteturais implementa
 
 ---
 
+## [1.4.3] - 2026-11-19
+### Corrigido
+- **Inspeção Visual Multimodal de Formatos Raster Não Suportados (`mcp-server/visual_pipeline.py`):**
+  - Criação de `_convert_raster_to_png` e atualização de `_save_asset` para converter automaticamente imagens extraídas em formatos não suportados pela leitura multimodal (`.jp2`, `.tiff`, `.bmp`) para `.png` via Pillow, recalculando `content_hash` e `asset_id` antes da gravação. Corrige o erro `INVALID_ARGUMENT (code 400): Unsupported mime type: image/jp2` que interrompia `get_visual_assets` / `read_file` em PDFs com imagens JPEG 2000.
+- **Detecção de Versão do Documento Principal (`mcp-server/server.py`):**
+  - Ajuste da expressão regular em `_detect_primary_batch_version` para reconhecer versões com sufixo colado ao nome (`FORTINETv1.4` → `v1.4`) e com múltiplos níveis (`_v1.8.4` → `v1.8.4`), garantindo a hierarquia correta `analise/<lote>/<version>/<timestamp>/`.
+
+### Adicionado / Melhorado
+- **Execução Multilote Isolada:** Documentado no `README.md` o prompt recomendado para processar todas as subpastas de 1º nível de `entrada/` com um subagente dedicado por lote (contexto limpo), incluindo `export_executive_email` e `build_master_index` centralizado ao final para evitar condições de corrida na Central `analise/index.html`.
+- **Testes de Regressão:** Inclusão de `test_visual_pipeline_converts_non_web_raster_formats_to_png` (`mcp-server/tests/test_adjudication.py`) e de casos de detecção de versão em `mcp-server/tests/test_document_roles.py` (33 testes).
+
+---
+
 ## [1.4.2] - 2026-11-18
 ### Adicionado / Melhorado
 - **Minuta de E-mail Executivo Nativa no SSOT e HTML + Ferramenta `export_executive_email`:**

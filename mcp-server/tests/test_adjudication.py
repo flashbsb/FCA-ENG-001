@@ -670,6 +670,32 @@ class FindingAdjudicationTests(unittest.TestCase):
                 self.assertIn("Parecer Teste — HLD <Sandbox>", md_txt)
                 self.assertIn("Topologia Hub-and-Spoke claramente descrita.", md_txt)
 
+    def test_visual_pipeline_converts_non_web_raster_formats_to_png(self):
+        import visual_pipeline
+        from io import BytesIO
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            img = Image.new("RGB", (64, 48), color=(12, 80, 160))
+            for fmt, ext in (("BMP", ".bmp"), ("TIFF", ".tiff"), ("JPEG2000", ".jp2")):
+                buf = BytesIO()
+                try:
+                    img.save(buf, format=fmt)
+                except Exception:
+                    continue
+                asset = visual_pipeline._save_asset(
+                    buf.getvalue(),
+                    source="doc.pdf",
+                    kind="imagem_embutida_pdf",
+                    output_dir=tmpdir,
+                    page=1,
+                    proposed_name=f"diagrama{ext}",
+                )
+                self.assertIsNotNone(asset, msg=f"Falha ao salvar formato {fmt}")
+                self.assertEqual(asset["mime_type"], "image/png")
+                self.assertTrue(asset["file"].endswith(".png"))
+                self.assertTrue((pathlib.Path(tmpdir) / pathlib.Path(asset["file"]).name).is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

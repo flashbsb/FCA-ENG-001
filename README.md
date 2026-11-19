@@ -1,6 +1,6 @@
 # Framework Corporativo de Revisão Técnica Independente (FCA-ENG-001)
 
-[![Versão](https://img.shields.io/badge/Versão-1.4.2-blue.svg)](framework/revisao.md)
+[![Versão](https://img.shields.io/badge/Versão-1.4.3-blue.svg)](framework/revisao.md)
 [![Procedimento](https://img.shields.io/badge/Código-FCA--ENG--001-green.svg)](framework/revisao.md)
 
 O **FCA-ENG-001** é um framework padronizado para condução de **Revisão Técnica Independente (RTI)** sobre documentações de engenharia, RFPs, RFIs, HLDs, LLDs, planilhas de especificação, arquitetura de sistemas e contratos de TI/Telecom/Cloud.
@@ -63,7 +63,7 @@ flowchart TD
 │   ├── audit_pipeline.py                # Normalização, sanitização de lote e conflitos cruzados
 │   ├── comments_extractor.py            # Extração estruturada e triangulação de comentários (COM-XXX)
 │   ├── semantic_pipeline.py             # Contrato de evidência e escopos da revisão semântica
-│   ├── visual_pipeline.py               # Extração, renderização e inventário de ativos visuais
+│   ├── visual_pipeline.py               # Extração, renderização e inventário de ativos visuais (normaliza .jp2/.tiff/.bmp → .png)
 │   ├── specialized_controls.py          # Controles determinísticos especializados (Carrier, Datacenter, LGPD, Contratos)
 │   ├── advanced_specialized_controls.py # Controles avançados (HLD, LLD, Cloud, Integrações)
 │   ├── cross_document.py                # Verificações cruzadas entre documentos do lote
@@ -132,8 +132,16 @@ entrada/
 > 1. Execute `profile_baseline` para identificar domínios, checklists e ativar 100% das skills recomendadas (modo autônomo por padrão; caso eu solicite validação prévia, apresente o plano de triagem e aguarde confirmação).  
 > 2. Execute `run_full_audit` para congelar a baseline (SHA-256), aplicar os controles determinísticos e extrair o inventário visual.  
 > 3. Conclua a revisão semântica (`get_semantic_review_manifest` / `get_semantic_document_chunk` / `record_semantic_analysis`), a inspeção visual quando aplicável (`get_visual_assets` / `record_visual_analysis`) e a adjudicação (`adjudicate_findings`).  
-> 4. Valide os entregáveis em `analise/<lote>/<version>/<timestamp>/relatorios/` (`dados_analise.json` e `index.html`) via `validate_analise_contract`.  
-> 5. Execute `finalize_execution` para arquivar o lote e atualizar a Central."*
+> 4. Preencha o `executive_summary` e exporte a minuta de e-mail executivo via `export_executive_email`.  
+> 5. Valide os entregáveis em `analise/<lote>/<version>/<timestamp>/relatorios/` (`dados_analise.json` e `index.html`) via `validate_analise_contract`.  
+> 6. Execute `finalize_execution` para arquivar o lote e atualizar a Central."*
+
+### Prompt para Múltiplos Lotes (Execução Isolada por Subagente)
+
+> *"Liste todas as subpastas de 1º nível em `entrada/` e execute a Revisão Técnica Independente (FCA-ENG-001) de cada lote de forma estritamente isolada, lançando um subagente dedicado por pasta (um contexto limpo por lote) para cumprir o pipeline completo (`profile_baseline` -> `run_full_audit` -> revisão semântica -> revisão visual -> `adjudicate_findings` -> `executive_summary` + `export_executive_email` -> `validate_analise_contract` -> `finalize_execution`). Ao final de todos os lotes, execute `build_master_index` e apresente o resumo consolidado com links dos relatórios HTML e das minutas de e-mail. Não execute `git commit`."*
+
+> [!TIP]
+> Executar `build_master_index` uma única vez ao final, pelo orquestrador, garante que `analise/index.html` e `analise/manifest.json` contenham todos os lotes mesmo quando os subagentes finalizam em paralelo.
 
 ### 🛠️ Skills Especializadas
 

@@ -1900,10 +1900,15 @@ def _detect_primary_batch_version(lote_name: str, files_info: list[dict]) -> str
             continue
         stem = os.path.splitext(fname)[0]
         clean_stem = re.sub(r"(?:[._\-\s]+rev(?:gptc|isao|iew)?[a-z0-9._\-]*)+$", "", stem, flags=re.IGNORECASE)
-        matches = re.findall(r"\b(v?\d+(?:\.\d+)+)\b", clean_stem or stem, flags=re.IGNORECASE)
+        raw_matches = re.findall(
+            r"(?:(?<![a-zA-Z0-9])v|(?<=[a-zA-Z])v)(\d+(?:\.\d+)+)(?![0-9.])|(?<![0-9.])(\d+(?:\.\d+)+)(?![0-9.])",
+            clean_stem or stem,
+            flags=re.IGNORECASE,
+        )
+        matches = [m[0] or m[1] for m in raw_matches if (m[0] or m[1])]
         if not matches:
             continue
-        ver_raw = matches[-1].lstrip("vV")
+        ver_raw = matches[-1]
         ver_norm = f"v{ver_raw}"
         file_tokens = set(re.findall(r"[a-z0-9]+", (clean_stem or stem).casefold()))
         overlap = len(lote_tokens & file_tokens)
@@ -4297,7 +4302,7 @@ def main():
             response = {"jsonrpc": "2.0", "id": req_id, "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "fca-eng-001-rti", "version": "1.4.2"}
+                "serverInfo": {"name": "fca-eng-001-rti", "version": "1.4.3"}
             }}
         elif method == "tools/list":
             response = {"jsonrpc": "2.0", "id": req_id, "result": {"tools": TOOLS_MANIFEST}}

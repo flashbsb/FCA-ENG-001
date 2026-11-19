@@ -55,6 +55,21 @@ class DocumentRoleSegregationTests(unittest.TestCase):
         )
         self.assertEqual(version_detected, "v1.2")
 
+        self.assertEqual(
+            server._detect_primary_batch_version(
+                "02 - High Level Design EAF HIPERCONVERGENTE",
+                [{"name": "HLD EAF ESTRUTURA HIPERCONVERGENTE_v1.8.4.pdf", "role": "alvo_principal"}],
+            ),
+            "v1.8.4",
+        )
+        self.assertEqual(
+            server._detect_primary_batch_version(
+                "03 - High Level Design EAF GERENCIA SD-WAN",
+                [{"name": "HLD EAF GERENCIA FORTINETv1.4.pdf", "role": "alvo_principal"}],
+            ),
+            "v1.4",
+        )
+
         # Empate (todos sem interseção com nome genérico de lote) -> todos são alvo_principal
         peer_roles = server._classify_batch_document_roles(
             "lote-exemplo-rfp",

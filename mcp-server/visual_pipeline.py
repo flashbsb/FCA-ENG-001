@@ -106,16 +106,44 @@ def _ocr_text(asset_path: str, tesseract: str | None, languages: str) -> tuple[s
         return "", "falhou: " + str(exc)[:300]
 
 
+def _convert_raster_to_png(data: bytes) -> bytes | None:
+    """Converte imagens raster não web-safe (ex: .jp2, .tiff, .bmp) para PNG via Pillow."""
+    try:
+        from io import BytesIO
+        from PIL import Image
+        with Image.open(BytesIO(data)) as image:
+            has_alpha = image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info)
+            target_mode = "RGBA" if has_alpha else "RGB"
+            if image.mode != target_mode:
+                image = image.convert(target_mode)
+            out = BytesIO()
+            image.save(out, format="PNG", optimize=True)
+            png_bytes = out.getvalue()
+            if len(png_bytes) > MAX_ASSET_BYTES:
+                image.thumbnail((2400, 2400))
+                out = BytesIO()
+                image.save(out, format="PNG", optimize=True)
+                png_bytes = out.getvalue()
+            return png_bytes
+    except Exception:
+        return None
+
+
 def _save_asset(data: bytes, *, source: str, kind: str, output_dir: str,
                 page: int | None = None, member: str | None = None,
                 proposed_name: str = "", tesseract: str | None = None,
                 languages: str = "eng") -> dict | None:
     if not data or len(data) > MAX_ASSET_BYTES:
         return None
+    extension = _image_extension(data, proposed_name)
+    if extension not in {".png", ".jpg", ".gif", ".webp", ".svg", ".drawio"}:
+        converted = _convert_raster_to_png(data)
+        if converted and len(converted) <= MAX_ASSET_BYTES:
+            data = converted
+            extension = ".png"
     content_hash = _sha256(data)
     location_key = f"{source}|{kind}|{page or ''}|{member or ''}|{content_hash}"
     asset_id = "IMG-" + hashlib.sha256(location_key.encode("utf-8")).hexdigest()[:12].upper()
-    extension = _image_extension(data, proposed_name)
     filename = asset_id + extension
     os.makedirs(output_dir, exist_ok=True)
     full_path = os.path.join(output_dir, filename)
